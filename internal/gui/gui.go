@@ -14,11 +14,12 @@ import (
 // Gui struct hold the gocui struct along with the gui's state, also keybindings
 // are tied with this struct in order to render those in different occasions
 type Gui struct {
-	g           *gocui.Gui
-	KeyBindings []*KeyBinding
-	State       guiState
-	mutex       *sync.Mutex
-	order       Layout
+	g              *gocui.Gui
+	KeyBindings    []*KeyBinding
+	State          guiState
+	mutex          *sync.Mutex
+	order          Layout
+	lazygitEnabled bool
 }
 
 // guiState struct holds the repositories, directories, mode and queue of the
@@ -109,6 +110,10 @@ func New(mode string, directories []string) (*Gui, error) {
 		State: initialState,
 		mutex: &sync.Mutex{},
 	}
+
+	// check if lazygit is available for focus mode
+	gui.lazygitEnabled = isLazygitAvailable()
+
 	for _, m := range modes {
 		if string(m.ModeID) == mode {
 			gui.State.Mode = m

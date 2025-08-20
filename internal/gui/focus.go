@@ -1,12 +1,87 @@
 package gui
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+
+	"github.com/isacikgoz/gitbatch/internal/git"
 	"github.com/jroimartin/gocui"
 )
 
 var (
 	focusViews = []viewFeature{commitViewFeature, dynamicViewFeature, remoteViewFeature, branchViewFeature, stashViewFeature}
 )
+
+func isLazygitAvailable() bool {
+	_, err := exec.LookPath("lazygit")
+	return err == nil
+}
+
+func (gui *Gui) openLazygitForRepository(r *git.Repository) error {
+	// save current cursor position so we can restore it later
+	mainView, err := gui.g.View(mainViewFeature.Name)
+	if err != nil {
+		return err
+	}
+	_, originY := mainView.Origin()
+	_, cursorY := mainView.Cursor()
+
+	gui.g.Close()
+
+	cmd := exec.Command("lazygit")
+	cmd.Dir = r.AbsPath
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err = cmd.Run()
+	if err != nil {
+		fmt.Printf("lazygit exited with error: %v\n", err)
+		fmt.Println("Press Enter to continue...")
+		fmt.Scanln()
+	}
+
+	newGui, initErr := gocui.NewGui(gocui.OutputNormal)
+	if initErr != nil {
+		return initErr
+	}
+
+	gui.g = newGui
+	newGui.Highlight = true
+	newGui.SelFgColor = gocui.ColorGreen
+	newGui.InputEsc = true
+	newGui.SetManagerFunc(gui.layout)
+
+	if err := gui.generateKeybindings(); err != nil {
+		newGui.Close()
+		return err
+	}
+	if err := gui.keybindings(newGui); err != nil {
+		newGui.Close()
+		return err
+	}
+
+	// refresh repository state since lazygit might have made changes
+	if refreshErr := r.Refresh(); refreshErr != nil {
+		// continue even if refresh fails
+	}
+
+	gui.g.Update(func(g *gocui.Gui) error {
+		if mainView, err := g.View(mainViewFeature.Name); err == nil {
+			mainView.SetOrigin(0, originY)
+			mainView.SetCursor(0, cursorY)
+		}
+
+		return gui.renderMain()
+	})
+
+	if err := newGui.MainLoop(); err != nil && err != gocui.ErrQuit {
+		return err
+	}
+
+	return gocui.ErrQuit
+}
 
 // set the layout and create views with their default size, name etc. values
 // TODO: window sizes can be handled better
@@ -92,6 +167,13 @@ func (gui *Gui) focusToRepository(g *gocui.Gui, v *gocui.View) error {
 	if r == nil {
 		return nil
 	}
+
+	// if lazygit is available, use it instead of the built-in focus view
+	if gui.lazygitEnabled {
+		return gui.openLazygitForRepository(r)
+	}
+
+	// original focus implementation
 	gui.order = focus
 
 	if _, err := g.SetCurrentView(commitViewFeature.Name); err != nil {
