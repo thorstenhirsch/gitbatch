@@ -102,7 +102,7 @@ func fetchWithGit(r *git.Repository, options *FetchOptions) (err error) {
 // the refspec is an optional +, followed by <src>:<dst>, where <src> is the
 // pattern for references on the remote side and <dst> is where those references
 // will be written locally. The + tells Git to update the reference even if it
-// isn’t a fast-forward.
+// isn't a fast-forward.
 func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (err error) {
 	opt := &gogit.FetchOptions{
 		RemoteName: options.RemoteName,
@@ -127,20 +127,26 @@ func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (e
 	if options.Progress {
 		opt.Progress = os.Stdout
 	}
+
+	// Store initial ref before fetch
+	ref, _ := r.Repo.Head()
+	initialRef := ref.Hash().String()[:7]
+
 	if err := r.Repo.Fetch(opt); err != nil {
 		if err == gogit.NoErrAlreadyUpToDate {
-			// Already up-to-date
-			// TODO: submit a PR for this kind of error, this type of catch is lame
+			// Already up-to-date - no need to refresh
+			r.SetWorkStatus(git.Success)
+			r.State.Message = initialRef + ".." + initialRef + " already up-to-date"
+			return nil
 		} else if strings.Contains(err.Error(), "couldn't find remote ref") {
 			// we don't have remote ref, so lets pull other things.. maybe it'd be useful
 			rp := r.State.Remote.RefSpecs[0]
 			if fetchTryCount < fetchMaxTry {
 				fetchTryCount++
-				_ = fetchWithGoGit(r, options, rp)
+				return fetchWithGoGit(r, options, rp)
 			} else {
 				return err
 			}
-			// TODO: submit a PR for this kind of error, this type of catch is lame
 		} else if strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
 			// The env variable SSH_AUTH_SOCK is not defined, maybe git can handle this
 			return fetchWithGit(r, options)
@@ -150,23 +156,27 @@ func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (e
 			return fetchWithGit(r, options)
 		}
 	}
+
 	r.SetWorkStatus(git.Success)
 
-	ref, _ := r.Repo.Head()
-	// TODO: fix this, refresh two times not cool
-	_ = r.Refresh()
+	// Only refresh once at the end and get updated refs
+	if err := r.Refresh(); err != nil {
+		return err
+	}
+
+	// Get updated refs after refresh
 	uRef := "origin/HEAD"
 	if r.State.Branch != nil && r.State.Branch.Upstream != nil {
 		uRef = r.State.Branch.Upstream.Reference.Hash().String()[:7]
 	}
 
-	msg, err := getFetchMessage(r, ref.Hash().String()[:7], uRef)
+	msg, err := getFetchMessage(r, initialRef, uRef)
 	if err != nil {
 		msg = "couldn't get stat"
 	}
 	r.State.Message = msg
-	// till this step everything should be ok
-	return r.Refresh()
+
+	return nil
 }
 
 func getFetchMessage(r *git.Repository, ref1, ref2 string) (string, error) {

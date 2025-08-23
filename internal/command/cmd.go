@@ -1,10 +1,12 @@
 package command
 
 import (
+	"context"
 	"log"
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Mode indicates that whether command should run native code or use git
@@ -23,6 +25,19 @@ const (
 // of the command except zero
 func Run(d string, c string, args []string) (string, error) {
 	cmd := exec.Command(c, args...)
+	if d != "" {
+		cmd.Dir = d
+	}
+	output, err := cmd.CombinedOutput()
+	return trimTrailingNewline(string(output)), err
+}
+
+// RunWithTimeout runs a command with a timeout context to prevent hanging
+func RunWithTimeout(d string, c string, args []string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c, args...)
 	if d != "" {
 		cmd.Dir = d
 	}

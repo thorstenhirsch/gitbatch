@@ -139,15 +139,23 @@ func (r *Repository) loadComponents(reset bool) error {
 // Refresh the belongings of a repository, this function is called right after
 // fetch/pull/merge operations
 func (r *Repository) Refresh() error {
-	var err error
-	// error can be ignored since the file already exists when app is loading
 	// if the Repository is only fast initialized, no need to refresh because
 	// it won't contain its belongings
 	if r.State.Branch == nil {
 		return nil
 	}
-	file, _ := os.Open(r.AbsPath)
-	fstat, _ := file.Stat()
+
+	// Check if we need to update modification time (avoid unnecessary file operations)
+	fstat, err := os.Stat(r.AbsPath)
+	if err != nil {
+		return err
+	}
+
+	// Only reload if the directory has been modified
+	if !fstat.ModTime().After(r.ModTime) {
+		return nil
+	}
+
 	// re-initialize the go-git repository struct after supposed update
 	rp, err := git.PlainOpen(r.AbsPath)
 	if err != nil {
@@ -156,9 +164,11 @@ func (r *Repository) Refresh() error {
 	r.Repo = *rp
 	// modification date may be changed
 	r.ModTime = fstat.ModTime()
+
 	if err := r.loadComponents(false); err != nil {
 		return err
 	}
+
 	// we could send an event data but we don't need for this topic
 	return r.Publish(RepositoryUpdated, nil)
 }
