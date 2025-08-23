@@ -83,10 +83,15 @@ func (jq *Queue) IsInTheQueue(r *git.Repository) (inTheQueue bool, j *Job) {
 	return inTheQueue, j
 }
 
-// StartJobsAsync start he jobs in the queue asynchronously
+// StartJobsAsync start the jobs in the queue asynchronously
 func (jq *Queue) StartJobsAsync() map[*Job]error {
+	if len(jq.series) == 0 {
+		return make(map[*Job]error)
+	}
 
-	ctx := context.TODO()
+	// Use a context with better lifecycle management
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	var (
 		maxWorkers = runtime.GOMAXPROCS(0)
@@ -94,17 +99,27 @@ func (jq *Queue) StartJobsAsync() map[*Job]error {
 		fails      = make(map[*Job]error)
 	)
 
+	var wg sync.WaitGroup
 	var mx sync.Mutex
-	for range jq.series {
 
+	// Process jobs with proper synchronization
+	jobCount := len(jq.series)
+	for i := 0; i < jobCount; i++ {
 		if err := sem.Acquire(ctx, 1); err != nil {
 			break
 		}
 
+		wg.Add(1)
 		go func() {
+			defer func() {
+				sem.Release(1)
+				wg.Done()
+			}()
 
-			defer sem.Release(1)
-			j, _, err := jq.StartNext()
+			j, finished, err := jq.StartNext()
+			if finished {
+				return
+			}
 			if err != nil {
 				mx.Lock()
 				fails[j] = err
@@ -112,6 +127,8 @@ func (jq *Queue) StartJobsAsync() map[*Job]error {
 			}
 		}()
 	}
-	_ = sem.Acquire(ctx, int64(maxWorkers))
+
+	// Wait for all jobs to complete
+	wg.Wait()
 	return fails
 }
