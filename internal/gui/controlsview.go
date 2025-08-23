@@ -11,17 +11,21 @@ import (
 // application area
 func (gui *Gui) openCheatSheetView(g *gocui.Gui, _ *gocui.View) error {
 	maxX, maxY := g.Size()
-	v, err := g.SetView(cheatSheetViewFeature.Name, maxX/2-25, maxY/2-10, maxX/2+25, maxY/2+10)
+	v, err := g.SetView(cheatSheetViewFeature.Name, maxX/2-30, maxY/2-12, maxX/2+30, maxY/2+12)
 	if err != nil {
 		if err != gocui.ErrUnknownView {
 			return err
 		}
 		v.Title = cheatSheetViewFeature.Title
+		v.Wrap = false
+
+		fmt.Fprintln(v, " "+yellow.Sprint("Use ↑/↓ or mouse wheel to scroll"))
+		fmt.Fprintln(v, "")
 
 		// Organize keybindings by category for better readability
 		fmt.Fprintln(v, " "+cyan.Sprint("Navigation:"))
-		gui.printKeyBinding(v, "↑/k", "Cursor Up")
-		gui.printKeyBinding(v, "↓/j", "Cursor Down")
+		gui.printKeyBinding(v, "↑ / k", "Cursor Up")
+		gui.printKeyBinding(v, "↓ / j", "Cursor Down")
 		gui.printKeyBinding(v, "g", "Jump to Top")
 		gui.printKeyBinding(v, "G", "Jump to Bottom")
 		gui.printKeyBinding(v, "ctrl + b", "Page Up")
@@ -36,7 +40,7 @@ func (gui *Gui) openCheatSheetView(g *gocui.Gui, _ *gocui.View) error {
 		fmt.Fprintln(v, " "+cyan.Sprint("Actions:"))
 		gui.printKeyBinding(v, "space", "Select")
 		gui.printKeyBinding(v, "enter", "Start")
-		gui.printKeyBinding(v, "ctrl + space", "Select All")
+		gui.printKeyBinding(v, "a / ctrl + space", "Select All")
 		gui.printKeyBinding(v, "backspace", "Deselect All")
 
 		fmt.Fprintln(v, "")
@@ -45,8 +49,8 @@ func (gui *Gui) openCheatSheetView(g *gocui.Gui, _ *gocui.View) error {
 		gui.printKeyBinding(v, "B", "Batch branch checkout")
 		gui.printKeyBinding(v, "h", "Help")
 		gui.printKeyBinding(v, "tab", "Back to Overview")
-		gui.printKeyBinding(v, "→/l", "Next Panel")
-		gui.printKeyBinding(v, "←/h", "Prev Panel")
+		gui.printKeyBinding(v, "→", "Next Panel")
+		gui.printKeyBinding(v, "←", "Prev Panel")
 
 		fmt.Fprintln(v, "")
 		fmt.Fprintln(v, " "+cyan.Sprint("Sorting:"))

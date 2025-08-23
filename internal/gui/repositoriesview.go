@@ -21,12 +21,79 @@ func (gui *Gui) renderMain() error {
 		return err
 	}
 	mainView.Clear()
+
+	// Render repositories
 	for _, r := range gui.State.Repositories {
 		fmt.Fprintln(mainView, gui.repositoryLabel(r))
 	}
+
+	// Update scroll indicators
+	gui.updateMainViewScrollIndicators(mainView)
+
 	// while refreshing, refresh sideViews for selected entity, something may
 	// be changed?
 	return gui.renderSideViews(gui.getSelectedRepository())
+}
+
+// updateMainViewScrollIndicators updates scroll indicators in corners
+func (gui *Gui) updateMainViewScrollIndicators(mainView *gocui.View) {
+	// Get view dimensions and scroll position from the content view
+	_, viewHeight := mainView.Size()
+	_, originY := mainView.Origin()
+	totalRepos := len(gui.State.Repositories)
+
+	// Check scroll state
+	hasMore := totalRepos > viewHeight && originY+viewHeight < totalRepos
+	hasAbove := originY > 0
+
+	// Update or create "more above" indicator
+	gui.updateScrollIndicatorView("scroll-above", hasAbove, "↑ more above", true)
+
+	// Update or create "more below" indicator
+	gui.updateScrollIndicatorView("scroll-below", hasMore, "↓ more below", false)
+}
+
+// updateScrollIndicatorView creates or updates a scroll indicator view
+func (gui *Gui) updateScrollIndicatorView(viewName string, show bool, text string, isTop bool) {
+	maxX, maxY := gui.g.Size()
+
+	if show {
+		// Calculate position for the indicator
+		textWidth := len(text) + 2 // Add padding
+		x1 := maxX - textWidth - 1
+		x2 := maxX - 1
+
+		var y1, y2 int
+		if isTop {
+			y1 = 0
+			y2 = 2
+		} else {
+			// Move up one line to avoid status bar
+			y1 = maxY - 4
+			y2 = maxY - 2
+		}
+
+		// Create or update the view
+		if v, err := gui.g.SetView(viewName, x1, y1, x2, y2); err != nil {
+			if err != gocui.ErrUnknownView {
+				return
+			}
+			v.Frame = true
+			v.BgColor = gocui.ColorDefault
+			v.FgColor = gocui.ColorYellow
+		}
+
+		// Update content
+		if v, err := gui.g.View(viewName); err == nil {
+			v.Clear()
+			fmt.Fprintf(v, " %s ", text)
+		}
+	} else {
+		// Hide the indicator by deleting the view
+		if _, err := gui.g.View(viewName); err == nil {
+			gui.g.DeleteView(viewName)
+		}
+	}
 }
 
 // listens the event -> "repository.updated"

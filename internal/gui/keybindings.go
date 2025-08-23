@@ -42,26 +42,10 @@ func (gui *Gui) generateKeybindings() error {
 				Vital:       false,
 			}, {
 				View:        view.Name,
-				Key:         'l',
-				Modifier:    gocui.ModNone,
-				Handler:     gui.nextFocusView,
-				Display:     "l",
-				Description: "Next Panel",
-				Vital:       false,
-			}, {
-				View:        view.Name,
 				Key:         gocui.KeyArrowLeft,
 				Modifier:    gocui.ModNone,
 				Handler:     gui.previousFocusView,
 				Display:     "←",
-				Description: "Prev Panel",
-				Vital:       false,
-			}, {
-				View:        view.Name,
-				Key:         'h',
-				Modifier:    gocui.ModNone,
-				Handler:     gui.previousFocusView,
-				Display:     "h",
 				Description: "Prev Panel",
 				Vital:       false,
 			},
@@ -358,6 +342,14 @@ func (gui *Gui) generateKeybindings() error {
 			Modifier:    gocui.ModNone,
 			Handler:     gui.markAllRepositories,
 			Display:     "ctrl + space",
+			Description: "Select All",
+			Vital:       false,
+		}, {
+			View:        mainViewFeature.Name,
+			Key:         'a',
+			Modifier:    gocui.ModNone,
+			Handler:     gui.markAllRepositories,
+			Display:     "a",
 			Description: "Select All",
 			Vital:       false,
 		}, {
@@ -672,6 +664,14 @@ func (gui *Gui) generateKeybindings() error {
 			Display:     "j",
 			Description: "Cursor Down",
 			Vital:       false,
+		}, {
+			View:        cheatSheetViewFeature.Name,
+			Key:         gocui.KeyEsc,
+			Modifier:    gocui.ModNone,
+			Handler:     gui.closeCheatSheetView,
+			Display:     "esc",
+			Description: "Close Help",
+			Vital:       true,
 		},
 		// Error View
 		{

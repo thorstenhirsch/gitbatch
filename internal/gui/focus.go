@@ -97,6 +97,9 @@ func (gui *Gui) focusLayout(g *gocui.Gui) error {
 		}
 		v.Title = mainViewFeature.Title
 		v.Overwrite = true
+	} else {
+		// View already exists, update scroll indicators
+		gui.updateMainViewScrollIndicators(v)
 	}
 	if v, err := g.SetView(remoteViewFeature.Name, rx, 0, maxX-1, int(0.25*float32(maxY))-1); err != nil {
 		if err != gocui.ErrUnknownView {

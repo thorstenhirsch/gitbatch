@@ -27,6 +27,9 @@ func (gui *Gui) overviewLayout(g *gocui.Gui) error {
 			return err
 		}
 		v.Frame = false
+	} else {
+		// View already exists, update scroll indicators
+		gui.updateMainViewScrollIndicators(v)
 	}
 	if v, err := g.SetView(remoteViewFeature.Name, dx, 0, -1, int(0.15*float32(maxY))-1); err != nil {
 		if err != gocui.ErrUnknownView {
