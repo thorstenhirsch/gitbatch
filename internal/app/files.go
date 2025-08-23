@@ -1,7 +1,6 @@
 package app
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -36,8 +35,23 @@ func walkRecursive(search, appendant []string) ([]string, []string) {
 		search[i] = search[len(search)-1]
 		search = search[:len(search)-1]
 		// lets append what we have found to continue recursion
-		search = append(search, a...)
-		appendant = append(appendant, b...)
+		// Optimize: pre-allocate capacity if we know we're adding multiple items
+		if len(a) > 0 {
+			if cap(search)-len(search) < len(a) {
+				newSearch := make([]string, len(search), len(search)+len(a)+10)
+				copy(newSearch, search)
+				search = newSearch
+			}
+			search = append(search, a...)
+		}
+		if len(b) > 0 {
+			if cap(appendant)-len(appendant) < len(b) {
+				newAppendant := make([]string, len(appendant), len(appendant)+len(b)+10)
+				copy(newAppendant, appendant)
+				appendant = newAppendant
+			}
+			appendant = append(appendant, b...)
+		}
 	}
 	return search, appendant
 }
@@ -45,36 +59,32 @@ func walkRecursive(search, appendant []string) ([]string, []string) {
 // separateDirectories is to find all the files in given path. This method
 // does not check if the given file is a valid git repositories
 func separateDirectories(directory string) ([]string, []string, error) {
-	dirs := make([]string, 0)
-	gitDirs := make([]string, 0)
-	files, err := ioutil.ReadDir(directory)
+	files, err := os.ReadDir(directory)
 	// can we read the directory?
 	if err != nil {
 		return nil, nil, nil
 	}
-	for _, f := range files {
-		repo := directory + string(os.PathSeparator) + f.Name()
-		file, err := os.Open(repo)
-		// if we cannot open it, simply continue to iteration and don't consider
-		if err != nil {
-			file.Close()
-			continue
-		}
-		dir, err := filepath.Abs(file.Name())
-		if err != nil {
-			file.Close()
-			continue
-		}
-		// with this approach, we ignore submodule or sub repositories in a git repository
-		ff, err := os.Open(dir + string(os.PathSeparator) + ".git")
-		if err != nil {
-			dirs = append(dirs, dir)
-		} else {
-			gitDirs = append(gitDirs, dir)
-		}
-		ff.Close()
-		file.Close()
 
+	// Pre-allocate slices with capacity based on file count to reduce reallocations
+	dirs := make([]string, 0, len(files))
+	gitDirs := make([]string, 0, len(files)/4) // Estimate fewer git repos than total files
+
+	for _, f := range files {
+		// Use filepath.Join for more efficient path construction
+		repo := filepath.Join(directory, f.Name())
+
+		dir, err := filepath.Abs(repo)
+		if err != nil {
+			continue
+		}
+
+		// Check if this directory contains a .git folder/file
+		gitPath := filepath.Join(dir, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			gitDirs = append(gitDirs, dir)
+		} else {
+			dirs = append(dirs, dir)
+		}
 	}
 	return dirs, gitDirs, nil
 }
