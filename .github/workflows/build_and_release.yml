@@ -1,0 +1,33 @@
+name: build and release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-and-release-all:
+    name: Build and release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+        exclude:
+          - goarch: arm64
+            goos: windows
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Release
+        uses: wangyoucao577/go-release-action@v1
+        with:
+          project_path: ./cmd/gitbatch
+          build_flags: "-tags=${{ matrix.goos }}"
+          ldflags: "-X github.com/thorstenhirsch/gitbatch/cmd/gitbatch.version=${{ github.ref_name }}"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
