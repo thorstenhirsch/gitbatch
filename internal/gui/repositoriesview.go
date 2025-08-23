@@ -101,6 +101,7 @@ func (gui *Gui) repositoryUpdated(event *git.RepositoryEvent) error {
 	gui.g.Update(func(g *gocui.Gui) error {
 		return gui.renderMain()
 	})
+
 	return nil
 }
 
@@ -114,14 +115,19 @@ func (gui *Gui) cursorDown(g *gocui.Gui, v *gocui.View) error {
 
 		// if we are at the end we just return
 		if cy+oy == ly {
-			return nil
-		}
-		if err := v.SetCursor(cx, cy+1); err != nil {
-			if err := v.SetOrigin(ox, oy+1); err != nil {
-				return err
+			// if we are at the bottom of the view, go to the top
+			_ = v.SetOrigin(ox, 0)
+			_ = v.SetCursor(cx, 0)
+		} else {
+			// otherwise just go down
+			if err := v.SetCursor(cx, cy+1); err != nil {
+				if err := v.SetOrigin(ox, oy+1); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	return gui.renderMain()
 }
 
@@ -130,13 +136,32 @@ func (gui *Gui) cursorUp(g *gocui.Gui, v *gocui.View) error {
 	if v != nil {
 		ox, oy := v.Origin()
 		cx, cy := v.Cursor()
-		if err := v.SetCursor(cx, cy-1); err != nil && oy > 0 {
-			if err := v.SetOrigin(ox, oy-1); err != nil {
-				return err
+		if (cy + oy) == 0 {
+			// if we are at the top of the view, go to the bottom
+			ly := len(gui.State.Repositories) - 1
+			_, sy := v.Size()
+			cy := minInt(sy-1, ly)
+			_ = v.SetOrigin(ox, ly-cy)
+			_ = v.SetCursor(cx, cy)
+		} else {
+			// otherwise just go up
+			if err := v.SetCursor(cx, cy-1); err != nil && oy > 0 {
+				if err := v.SetOrigin(ox, oy-1); err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	return gui.renderMain()
+}
+
+// minInt returns the smaller of two ints
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // moves cursor to the top
@@ -151,6 +176,7 @@ func (gui *Gui) cursorTop(g *gocui.Gui, v *gocui.View) error {
 			return err
 		}
 	}
+
 	return gui.renderMain()
 }
 
@@ -174,6 +200,7 @@ func (gui *Gui) cursorEnd(g *gocui.Gui, v *gocui.View) error {
 			return err
 		}
 	}
+
 	return gui.renderMain()
 }
 
@@ -181,23 +208,36 @@ func (gui *Gui) cursorEnd(g *gocui.Gui, v *gocui.View) error {
 func (gui *Gui) pageDown(g *gocui.Gui, v *gocui.View) error {
 	if v != nil {
 		ox, oy := v.Origin()
-		cx, _ := v.Cursor()
+		cx, cy := v.Cursor()
 		_, vy := v.Size()
 		lr := len(gui.State.Repositories)
 		if lr < vy {
 			return nil
 		}
-		if oy+vy >= lr-vy {
-			if err := v.SetOrigin(ox, lr-vy); err != nil {
+
+		// Check if we can scroll down a full page
+		if oy+vy < lr {
+			// Normal page down - scroll down by view height
+			if err := v.SetOrigin(ox, oy+vy); err != nil {
 				return err
 			}
-		} else if err := v.SetOrigin(ox, oy+vy); err != nil {
-			return err
-		}
-		if err := v.SetCursor(cx, 0); err != nil {
-			return err
+			if err := v.SetCursor(cx, 0); err != nil {
+				return err
+			}
+		} else {
+			// We're at the last page - can't scroll down a full page
+			// Check if cursor is already at the last repository
+			lastRepoInView := lr - oy - 1 // last repo's position relative to current view
+			if cy < lastRepoInView {
+				// Move cursor to the last repository in the current view
+				if err := v.SetCursor(cx, lastRepoInView); err != nil {
+					return err
+				}
+			}
+			// If cursor is already at the last repo, do nothing (vi-style behavior)
 		}
 	}
+
 	return gui.renderMain()
 }
 
@@ -222,6 +262,7 @@ func (gui *Gui) pageUp(g *gocui.Gui, v *gocui.View) error {
 			return err
 		}
 	}
+
 	return gui.renderMain()
 }
 
@@ -236,6 +277,7 @@ func (gui *Gui) getSelectedRepository() *git.Repository {
 	v, _ := gui.g.View(mainViewFeature.Name)
 	_, oy := v.Origin()
 	_, cy := v.Cursor()
+
 	return gui.State.Repositories[cy+oy]
 }
 
@@ -271,6 +313,7 @@ func (gui *Gui) addToQueue(r *git.Repository) error {
 		return err
 	}
 	r.SetWorkStatus(git.Queued)
+
 	return nil
 }
 
@@ -281,6 +324,7 @@ func (gui *Gui) removeFromQueue(r *git.Repository) error {
 		return err
 	}
 	r.SetWorkStatus(git.Available)
+
 	return nil
 }
 
@@ -297,6 +341,7 @@ func (gui *Gui) startQueue(g *gocui.Gui, v *gocui.View) error {
 			}
 		}
 	}(gui)
+
 	return nil
 }
 
@@ -315,6 +360,7 @@ func (gui *Gui) submitCredentials(g *gocui.Gui, v *gocui.View) error {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -335,6 +381,7 @@ func (gui *Gui) markRepository(g *gocui.Gui, v *gocui.View) error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -350,6 +397,7 @@ func (gui *Gui) markAllRepositories(g *gocui.Gui, v *gocui.View) error {
 			continue
 		}
 	}
+
 	return nil
 }
 
@@ -365,6 +413,7 @@ func (gui *Gui) unmarkAllRepositories(g *gocui.Gui, v *gocui.View) error {
 			continue
 		}
 	}
+
 	return nil
 }
 
@@ -372,6 +421,7 @@ func (gui *Gui) unmarkAllRepositories(g *gocui.Gui, v *gocui.View) error {
 func (gui *Gui) sortByName(g *gocui.Gui, v *gocui.View) error {
 	sort.Sort(git.Alphabetical(gui.State.Repositories))
 	_ = gui.renderMain()
+
 	return nil
 }
 
@@ -380,5 +430,6 @@ func (gui *Gui) sortByName(g *gocui.Gui, v *gocui.View) error {
 func (gui *Gui) sortByMod(g *gocui.Gui, v *gocui.View) error {
 	sort.Sort(git.LastModified(gui.State.Repositories))
 	_ = gui.renderMain()
+
 	return nil
 }
