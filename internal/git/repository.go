@@ -173,6 +173,38 @@ func (r *Repository) Refresh() error {
 	return r.Publish(RepositoryUpdated, nil)
 }
 
+// ForceRefresh forces a refresh of the repository without checking modification time.
+// This is useful when external tools (like lazygit) may have made changes that don't
+// update the directory modification time.
+func (r *Repository) ForceRefresh() error {
+	// if the Repository is only fast initialized, no need to refresh because
+	// it won't contain its belongings
+	if r.State.Branch == nil {
+		return nil
+	}
+
+	// re-initialize the go-git repository struct
+	rp, err := git.PlainOpen(r.AbsPath)
+	if err != nil {
+		return err
+	}
+	r.Repo = *rp
+
+	// update modification time
+	fstat, err := os.Stat(r.AbsPath)
+	if err != nil {
+		return err
+	}
+	r.ModTime = fstat.ModTime()
+
+	if err := r.loadComponents(false); err != nil {
+		return err
+	}
+
+	// we could send an event data but we don't need for this topic
+	return r.Publish(RepositoryUpdated, nil)
+}
+
 // On adds new listener.
 // listener is a callback function that will be called when event emits
 func (r *Repository) On(event string, listener RepositoryListener) {

@@ -63,7 +63,9 @@ func (gui *Gui) openLazygitForRepository(r *git.Repository) error {
 	}
 
 	// refresh repository state since lazygit might have made changes
-	if refreshErr := r.Refresh(); refreshErr != nil {
+	// use ForceRefresh to bypass modification time check since external tools
+	// may not always update directory modification time
+	if refreshErr := r.ForceRefresh(); refreshErr != nil {
 		// continue even if refresh fails
 	}
 
