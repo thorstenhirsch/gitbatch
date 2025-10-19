@@ -23,6 +23,11 @@ func (gui *Gui) openCheatSheetView(g *gocui.Gui, _ *gocui.View) error {
 		fmt.Fprintln(v, "")
 
 		// Organize keybindings by category for better readability
+		fmt.Fprintln(v, " "+cyan.Sprint("Mode:"))
+		gui.printKeyBinding(v, "f", "Fetch [default]")
+		gui.printKeyBinding(v, "p", "Pull")
+
+		fmt.Fprintln(v, "")
 		fmt.Fprintln(v, " "+cyan.Sprint("Navigation:"))
 		gui.printKeyBinding(v, "↑ / k", "Cursor Up")
 		gui.printKeyBinding(v, "↓ / j", "Cursor Down")
