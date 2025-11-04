@@ -70,6 +70,11 @@ func separateDirectories(directory string) ([]string, []string, error) {
 	gitDirs := make([]string, 0, len(files)/4) // Estimate fewer git repos than total files
 
 	for _, f := range files {
+		// Skip non-directories
+		if !f.IsDir() {
+			continue
+		}
+		
 		// Use filepath.Join for more efficient path construction
 		repo := filepath.Join(directory, f.Name())
 

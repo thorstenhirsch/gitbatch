@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/thorstenhirsch/gitbatch/internal/gui"
+	"github.com/thorstenhirsch/gitbatch/internal/tui"
 )
 
 // The App struct is responsible to hold app-wide related entities. Currently
@@ -46,12 +46,8 @@ func (a *App) Run() error {
 	if a.Config.QuickMode {
 		return a.execQuickMode(dirs)
 	}
-	// create a gui.Gui struct and run the gui
-	gui, err := gui.New(a.Config.Mode, dirs)
-	if err != nil {
-		return err
-	}
-	return gui.Run()
+	// create a tui and run it
+	return tui.Run(a.Config.Mode, dirs)
 }
 
 func overrideConfig(appConfig, setupConfig *Config) *Config {
