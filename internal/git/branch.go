@@ -167,16 +167,20 @@ type RevListOptions struct {
 // RevListCount returns the count of commits between two references.
 // This is more efficient than RevList when you only need the count.
 func RevListCount(r *Repository, options RevListOptions) (int, error) {
-	args := []string{revlistCommand, "--count"}
-	if len(options.Ref1) > 0 && len(options.Ref2) > 0 {
-		arg1 := options.Ref1 + ".." + options.Ref2
-		args = append(args, arg1)
+	// Validate that both references are provided
+	if len(options.Ref1) == 0 || len(options.Ref2) == 0 {
+		return 0, fmt.Errorf("both Ref1 and Ref2 must be provided")
 	}
+
+	args := []string{revlistCommand, "--count"}
+	arg1 := options.Ref1 + ".." + options.Ref2
+	args = append(args, arg1)
+
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.AbsPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return -1, fmt.Errorf("rev-list --count failed: %w (output: %s)", err, string(out))
+		return 0, fmt.Errorf("rev-list --count failed: %w (output: %s)", err, string(out))
 	}
 
 	s := strings.TrimSpace(string(out))
@@ -186,7 +190,7 @@ func RevListCount(r *Repository, options RevListOptions) (int, error) {
 
 	count, err := strconv.Atoi(s)
 	if err != nil {
-		return -1, fmt.Errorf("invalid count output: %s", s)
+		return 0, fmt.Errorf("invalid count output: %s", s)
 	}
 
 	return count, nil
