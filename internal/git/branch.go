@@ -178,17 +178,17 @@ func RevListCount(r *Repository, options RevListOptions) (int, error) {
 	if err != nil {
 		return -1, fmt.Errorf("rev-list --count failed: %w (output: %s)", err, string(out))
 	}
-	
+
 	s := strings.TrimSpace(string(out))
 	if len(s) == 0 {
 		return 0, nil
 	}
-	
+
 	count, err := strconv.Atoi(s)
 	if err != nil {
 		return -1, fmt.Errorf("invalid count output: %s", s)
 	}
-	
+
 	return count, nil
 }
 
@@ -260,7 +260,7 @@ func (r *Repository) SyncRemoteAndBranch(b *Branch) error {
 	}
 
 	var push, pull string
-	
+
 	// Calculate pushables (commits in local that are not in upstream)
 	// Use RevListCount for better performance and resilience
 	pushCount, err := RevListCount(r, RevListOptions{
@@ -273,7 +273,7 @@ func (r *Repository) SyncRemoteAndBranch(b *Branch) error {
 	} else {
 		push = strconv.Itoa(pushCount)
 	}
-	
+
 	// Calculate pullables (commits in upstream that are not in local)
 	pullCount, err := RevListCount(r, RevListOptions{
 		Ref1: head,
@@ -285,7 +285,7 @@ func (r *Repository) SyncRemoteAndBranch(b *Branch) error {
 	} else {
 		pull = strconv.Itoa(pullCount)
 	}
-	
+
 	b.Pullables = pull
 	b.Pushables = push
 	return nil
@@ -344,6 +344,6 @@ func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {
 			return rb, nil
 		}
 	}
-	
+
 	return nil, fmt.Errorf("upstream branch %s not found", targetBranchName)
 }
