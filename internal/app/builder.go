@@ -43,6 +43,9 @@ func New(argConfig *Config) (*App, error) {
 // Run starts the application.
 func (a *App) Run() error {
 	dirs := generateDirectories(a.Config.Directories, a.Config.Depth)
+	if len(dirs) == 0 {
+		return fmt.Errorf("no git repositories found in specified directories")
+	}
 	if a.Config.QuickMode {
 		return a.execQuickMode(dirs)
 	}
@@ -51,15 +54,19 @@ func (a *App) Run() error {
 }
 
 func overrideConfig(appConfig, setupConfig *Config) *Config {
+	// CLI arguments should always override config file values
+	// Only keep appConfig values if setupConfig values are unset/default
+	
 	if len(setupConfig.Directories) > 0 {
 		appConfig.Directories = setupConfig.Directories
 	}
 	if len(setupConfig.LogLevel) > 0 {
 		appConfig.LogLevel = setupConfig.LogLevel
 	}
-	if setupConfig.Depth > 0 {
-		appConfig.Depth = setupConfig.Depth
-	}
+	// Always use setupConfig.Depth, even if it's 0 (explicit choice)
+	// This allows users to override config file with depth=0
+	appConfig.Depth = setupConfig.Depth
+	
 	if setupConfig.QuickMode {
 		appConfig.QuickMode = setupConfig.QuickMode
 	}
