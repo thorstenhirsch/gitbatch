@@ -164,6 +164,38 @@ type RevListOptions struct {
 	Ref2 string
 }
 
+// RevListCount returns the count of commits between two references.
+// This is more efficient than RevList when you only need the count.
+func RevListCount(r *Repository, options RevListOptions) (int, error) {
+	// Validate that both references are provided
+	if len(options.Ref1) == 0 || len(options.Ref2) == 0 {
+		return 0, fmt.Errorf("both Ref1 and Ref2 must be provided")
+	}
+
+	args := []string{revlistCommand, "--count"}
+	arg1 := options.Ref1 + ".." + options.Ref2
+	args = append(args, arg1)
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.AbsPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("rev-list --count failed: %w (output: %s)", err, string(out))
+	}
+
+	s := strings.TrimSpace(string(out))
+	if len(s) == 0 {
+		return 0, nil
+	}
+
+	count, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid count output: %s", s)
+	}
+
+	return count, nil
+}
+
 // RevList is the legacy implementation of "git rev-list" command.
 func RevList(r *Repository, options RevListOptions) ([]*object.Commit, error) {
 	args := make([]string, 0)
@@ -176,15 +208,23 @@ func RevList(r *Repository, options RevListOptions) ([]*object.Commit, error) {
 	cmd.Dir = r.AbsPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, err
+		// Check if it's just an empty result (branches are identical)
+		// In this case, git rev-list returns exit code 0 with empty output
+		// But some errors like "unknown revision" return exit code 128
+		return nil, fmt.Errorf("rev-list failed: %w (output: %s)", err, string(out))
 	}
 	s := string(out)
+	if len(s) == 0 {
+		// Empty output means no commits in the range, which is valid
+		return make([]*object.Commit, 0), nil
+	}
 	hashes := strings.Split(s, "\n")
 	commits := make([]*object.Commit, 0)
 	for _, hash := range hashes {
 		if len(hash) == hashLength {
 			c, err := r.Repo.CommitObject(plumbing.NewHash(hash))
 			if err != nil {
+				// Skip invalid commit objects but continue processing
 				continue
 			}
 			commits = append(commits, c)
@@ -206,26 +246,50 @@ func (r *Repository) SyncRemoteAndBranch(b *Branch) error {
 		return nil
 	}
 
+	// Validate upstream reference exists
+	if b.Upstream.Reference == nil {
+		b.Pullables = "?"
+		b.Pushables = "?"
+		return nil
+	}
+
 	head := headRef.Hash().String()
+	upstreamHash := b.Upstream.Reference.Hash().String()
+
+	// Validate that both hashes are valid (40 character hex strings)
+	if len(head) != hashLength || len(upstreamHash) != hashLength {
+		b.Pullables = "?"
+		b.Pushables = "?"
+		return nil
+	}
+
 	var push, pull string
-	pushables, err := RevList(r, RevListOptions{
-		Ref1: b.Upstream.Reference.Hash().String(),
+
+	// Calculate pushables (commits in local that are not in upstream)
+	// Use RevListCount for better performance and resilience
+	pushCount, err := RevListCount(r, RevListOptions{
+		Ref1: upstreamHash,
 		Ref2: head,
 	})
 	if err != nil {
+		// On error, keep trying for pullables instead of failing completely
 		push = "?"
 	} else {
-		push = strconv.Itoa(len(pushables))
+		push = strconv.Itoa(pushCount)
 	}
-	pullables, err := RevList(r, RevListOptions{
+
+	// Calculate pullables (commits in upstream that are not in local)
+	pullCount, err := RevListCount(r, RevListOptions{
 		Ref1: head,
-		Ref2: b.Upstream.Reference.Hash().String(),
+		Ref2: upstreamHash,
 	})
 	if err != nil {
+		// On error, set to unknown but don't fail the whole operation
 		pull = "?"
 	} else {
-		pull = strconv.Itoa(len(pullables))
+		pull = strconv.Itoa(pullCount)
 	}
+
 	b.Pullables = pull
 	b.Pushables = push
 	return nil
@@ -242,27 +306,48 @@ func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {
 	cmd.Dir = r.AbsPath
 	cr, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("upstream not found")
+		return nil, fmt.Errorf("upstream not found: %w", err)
+	}
+
+	remoteName := strings.TrimSpace(string(cr))
+	if remoteName == "" {
+		return nil, fmt.Errorf("upstream remote is empty")
 	}
 
 	args = []string{"config", "--get", "branch." + branchName + ".merge"}
 	cmd = exec.Command("git", args...)
 	cmd.Dir = r.AbsPath
 	cm, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(cm), branchName) {
-		return nil, fmt.Errorf("default merge branch found")
+	if err != nil {
+		return nil, fmt.Errorf("upstream merge config not found: %w", err)
 	}
 
+	mergeRef := strings.TrimSpace(string(cm))
+	if mergeRef == "" || !strings.Contains(mergeRef, branchName) {
+		return nil, fmt.Errorf("invalid merge branch configuration")
+	}
+
+	// Find the remote by name
+	var targetRemote *Remote
 	for _, rm := range r.Remotes {
-		if rm.Name == strings.TrimSpace(string(cr)) {
+		if rm.Name == remoteName {
+			targetRemote = rm
 			r.State.Remote = rm
+			break
 		}
 	}
 
-	for _, rb := range r.State.Remote.Branches {
-		if rb.Name == r.State.Remote.Name+"/"+branchName {
+	if targetRemote == nil {
+		return nil, fmt.Errorf("remote %s not found in repository", remoteName)
+	}
+
+	// Find the remote branch
+	targetBranchName := targetRemote.Name + "/" + branchName
+	for _, rb := range targetRemote.Branches {
+		if rb.Name == targetBranchName {
 			return rb, nil
 		}
 	}
-	return nil, fmt.Errorf("upstream not found")
+
+	return nil, fmt.Errorf("upstream branch %s not found", targetBranchName)
 }
