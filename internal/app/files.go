@@ -9,10 +9,27 @@ import (
 // load function
 func generateDirectories(dirs []string, depth int) []string {
 	gitDirs := make([]string, 0)
-	
-	// If depth is 0, check if the provided directories themselves are git repos
+
+	// Make a copy of original directories for fallback check
+	originalDirs := make([]string, len(dirs))
+	copy(originalDirs, dirs)
+
+	// If depth is 0, search in immediate subdirectories (depth 1)
+	// This allows gitbatch to be run from the parent directory of git repos
 	if depth == 0 {
-		for _, dir := range dirs {
+		depth = 1
+	}
+
+	// Search recursively
+	for i := 0; i < depth; i++ {
+		directories, repositories := walkRecursive(dirs, gitDirs)
+		dirs = directories
+		gitDirs = repositories
+	}
+
+	// If no repos found in subdirectories, check if the original directories themselves are git repos
+	if len(gitDirs) == 0 {
+		for _, dir := range originalDirs {
 			absDir, err := filepath.Abs(dir)
 			if err != nil {
 				continue
@@ -23,19 +40,10 @@ func generateDirectories(dirs []string, depth int) []string {
 				gitDirs = append(gitDirs, absDir)
 			}
 		}
-		return gitDirs
 	}
-	
-	// Otherwise, search recursively
-	for i := 0; i < depth; i++ {
-		directories, repositories := walkRecursive(dirs, gitDirs)
-		dirs = directories
-		gitDirs = repositories
-	}
-	return gitDirs
-}
 
-// returns given values, first search directories and second stands for possible
+	return gitDirs
+} // returns given values, first search directories and second stands for possible
 // git repositories. Call this func from a "for i := 0; i<depth; i++" loop
 func walkRecursive(search, appendant []string) ([]string, []string) {
 	max := len(search)

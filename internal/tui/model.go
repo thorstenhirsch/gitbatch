@@ -16,22 +16,23 @@ type Model struct {
 	queue         *job.Queue
 	failoverQueue *job.Queue
 	targetBranch  string
-	
+
 	// UI state
-	cursor        int
-	width         int
-	height        int
-	ready         bool
-	loading       bool
-	err           error
-	
+	cursor      int
+	width       int
+	height      int
+	ready       bool
+	loading     bool
+	jobsRunning bool
+	err         error
+
 	// View state
-	currentView   ViewType
-	sidePanel     SidePanelType
-	showHelp      bool
-	
+	currentView ViewType
+	sidePanel   SidePanelType
+	showHelp    bool
+
 	// Styles
-	styles        *Styles
+	styles *Styles
 }
 
 // ViewType represents the current view mode
@@ -77,7 +78,7 @@ var (
 	pullMode     = Mode{ID: PullMode, DisplayString: "Pull", CommandString: "pull"}
 	mergeMode    = Mode{ID: MergeMode, DisplayString: "Merge", CommandString: "merge"}
 	checkoutMode = Mode{ID: CheckoutMode, DisplayString: "Checkout", CommandString: "checkout"}
-	
+
 	modes = []Mode{fetchMode, pullMode, mergeMode}
 )
 
@@ -85,7 +86,9 @@ var (
 type Styles struct {
 	App            lipgloss.Style
 	Title          lipgloss.Style
-	StatusBar      lipgloss.Style
+	StatusBarFetch lipgloss.Style
+	StatusBarPull  lipgloss.Style
+	StatusBarMerge lipgloss.Style
 	Help           lipgloss.Style
 	List           lipgloss.Style
 	ListItem       lipgloss.Style
@@ -107,44 +110,52 @@ func DefaultStyles() *Styles {
 		App: lipgloss.NewStyle(),
 		Title: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#7E57C2"}).
 			Padding(0, 1),
-		StatusBar: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#000000")).
-			Background(lipgloss.Color("#FFFFFF")).
+		StatusBarFetch: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#90CAF9", Dark: "#1E88E5"}).
+			Padding(0, 1),
+		StatusBarPull: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#A5D6A7", Dark: "#43A047"}).
+			Padding(0, 1),
+		StatusBarMerge: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFE082", Dark: "#FFA000"}).
 			Padding(0, 1),
 		Help: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#626262")),
+			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
 		List: lipgloss.NewStyle().
 			Padding(1, 2),
 		ListItem: lipgloss.NewStyle().
 			PaddingLeft(2),
 		SelectedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00FF00")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#1976D2", Dark: "#64B5F6"}).
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFFF00")),
+			Foreground(lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}),
 		WorkingItem: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00FFFF")),
+			Foreground(lipgloss.AdaptiveColor{Light: "#0097A7", Dark: "#4DD0E1"}),
 		SuccessItem: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00FF00")),
+			Foreground(lipgloss.AdaptiveColor{Light: "#388E3C", Dark: "#81C784"}),
 		FailedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF0000")),
+			Foreground(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}),
 		BranchInfo: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#00FFFF")),
+			Foreground(lipgloss.AdaptiveColor{Light: "#00796B", Dark: "#4DB6AC"}),
 		KeyBinding: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFFF00")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}).
 			Bold(true),
 		Panel: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#874BFD")).
+			BorderForeground(lipgloss.AdaptiveColor{Light: "#7E57C2", Dark: "#9575CD"}).
 			Padding(0, 1),
 		PanelTitle: lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FFFDF5")),
+			Foreground(lipgloss.AdaptiveColor{Light: "#424242", Dark: "#E0E0E0"}),
 		Error: lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF0000")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}).
 			Bold(true),
 	}
 }
@@ -158,7 +169,7 @@ func New(mode string, directories []string) *Model {
 			break
 		}
 	}
-	
+
 	return &Model{
 		directories:   directories,
 		mode:          initialMode,
@@ -178,7 +189,7 @@ func (m *Model) Init() tea.Cmd {
 }
 
 // repositoriesLoadedMsg is sent when all repositories are loaded
-type repositoriesLoadedMsg struct{
+type repositoriesLoadedMsg struct {
 	repos []*git.Repository
 }
 
@@ -188,3 +199,9 @@ type errMsg struct {
 }
 
 func (e errMsg) Error() string { return e.err.Error() }
+
+// lazygitClosedMsg is sent when lazygit exits
+type lazygitClosedMsg struct{}
+
+// jobCompletedMsg is sent when a job completes (success or failure)
+type jobCompletedMsg struct{}

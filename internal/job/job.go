@@ -53,6 +53,8 @@ func (j *Job) start() error {
 			j.Repository.State.Message = err.Error()
 			return err
 		}
+		j.Repository.SetWorkStatus(git.Success)
+		j.Repository.State.Message = "fetch completed"
 	case PullJob:
 		j.Repository.State.Message = "pulling.."
 		var opts *command.PullOptions
@@ -74,6 +76,8 @@ func (j *Job) start() error {
 			j.Repository.State.Message = err.Error()
 			return err
 		}
+		j.Repository.SetWorkStatus(git.Success)
+		j.Repository.State.Message = "pull completed"
 	case MergeJob:
 		j.Repository.State.Message = "merging.."
 		if j.Repository.State.Branch.Upstream == nil {
@@ -88,6 +92,8 @@ func (j *Job) start() error {
 			j.Repository.State.Message = err.Error()
 			return err
 		}
+		j.Repository.SetWorkStatus(git.Success)
+		j.Repository.State.Message = "merge completed"
 	case CheckoutJob:
 		j.Repository.State.Message = "switching to.."
 		var opts *command.CheckoutOptions
@@ -104,6 +110,8 @@ func (j *Job) start() error {
 			j.Repository.State.Message = err.Error()
 			return err
 		}
+		j.Repository.SetWorkStatus(git.Success)
+		j.Repository.State.Message = "checkout completed"
 	default:
 		j.Repository.SetWorkStatus(git.Available)
 		return nil
