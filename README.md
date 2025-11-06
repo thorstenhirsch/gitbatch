@@ -39,8 +39,8 @@ For more information see the [wiki pages](https://github.com/thorstenhirsch/gitb
 
 ## Credits
 - [go-git](https://github.com/src-d/go-git) for git interface (partially)
-- [gocui](https://github.com/jroimartin/gocui) for user interface
+- [Bubble Tea](https://github.com/charmbracelet/bubbletea) for terminal user interface
+- [Lipgloss](https://github.com/charmbracelet/lipgloss) for terminal styling
 - [viper](https://github.com/spf13/viper) for configuration management
-- [color](https://github.com/fatih/color) for colored text
 - [kingpin](https://github.com/alecthomas/kingpin) for command-line flag&options
 
