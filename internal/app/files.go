@@ -9,6 +9,24 @@ import (
 // load function
 func generateDirectories(dirs []string, depth int) []string {
 	gitDirs := make([]string, 0)
+	
+	// If depth is 0, check if the provided directories themselves are git repos
+	if depth == 0 {
+		for _, dir := range dirs {
+			absDir, err := filepath.Abs(dir)
+			if err != nil {
+				continue
+			}
+			// Check if this directory contains a .git folder/file
+			gitPath := filepath.Join(absDir, ".git")
+			if _, err := os.Stat(gitPath); err == nil {
+				gitDirs = append(gitDirs, absDir)
+			}
+		}
+		return gitDirs
+	}
+	
+	// Otherwise, search recursively
 	for i := 0; i < depth; i++ {
 		directories, repositories := walkRecursive(dirs, gitDirs)
 		dirs = directories
@@ -75,6 +93,12 @@ func separateDirectories(directory string) ([]string, []string, error) {
 
 		dir, err := filepath.Abs(repo)
 		if err != nil {
+			continue
+		}
+
+		// Only process directories (not files)
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
 			continue
 		}
 
