@@ -27,7 +27,7 @@ jobs:
         with:
           project_path: ./cmd/gitbatch
           build_flags: "-tags=${{ matrix.goos }}"
-          ldflags: "-X github.com/thorstenhirsch/gitbatch/cmd/gitbatch.version=${{ github.ref_name }}"
+          ldflags: "-X main.version=${{ github.ref_name }}"
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}

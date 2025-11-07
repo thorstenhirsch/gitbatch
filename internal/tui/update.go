@@ -197,15 +197,27 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activatePanel(BranchPanel)
 
 	case "c":
+		if m.hasMultipleTagged() {
+			m.notifyMultiSelectionRestriction("Commit view unavailable for tagged selection")
+			return m, nil
+		}
 		m.activatePanel(CommitPanel)
 
 	case "r":
 		m.activatePanel(RemotePanel)
 
 	case "s":
+		if m.hasMultipleTagged() {
+			m.notifyMultiSelectionRestriction("Status view unavailable for tagged selection")
+			return m, nil
+		}
 		m.activatePanel(StatusPanel)
 
 	case "S":
+		if m.hasMultipleTagged() {
+			m.notifyMultiSelectionRestriction("Stash view unavailable for tagged selection")
+			return m, nil
+		}
 		m.activatePanel(StashPanel)
 
 	case "n":
@@ -397,11 +409,8 @@ func (m *Model) sortByTime() {
 }
 
 func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
-	repo := m.currentRepository()
-	if repo == nil {
-		return m, nil
-	}
-	count := len(repo.Branches)
+	items := m.branchPanelItems()
+	count := len(items)
 	if count == 0 {
 		return m, nil
 	}
@@ -416,14 +425,37 @@ func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "end", "G":
 		m.branchCursor = count - 1
 	case "enter", "c":
-		branch := repo.Branches[clampIndex(m.branchCursor, count)]
-		return m, m.checkoutBranchCmd(repo, branch)
+		branchName := items[clampIndex(m.branchCursor, count)].Name
+		if branchName == "" || branchName == "<unknown>" {
+			return m, nil
+		}
+		if m.hasMultipleTagged() {
+			return m, m.checkoutBranchMultiCmd(m.taggedRepositories(), branchName)
+		}
+		repos := m.panelRepositories()
+		if len(repos) == 0 {
+			return m, nil
+		}
+		branch := findBranchByName(repos[0], branchName)
+		return m, m.checkoutBranchCmd(repos[0], branch)
 	case "d":
-		branch := repo.Branches[clampIndex(m.branchCursor, count)]
-		if repo.State != nil && repo.State.Branch != nil && branch != nil && branch.Name == repo.State.Branch.Name {
+		branchName := items[clampIndex(m.branchCursor, count)].Name
+		if branchName == "" || branchName == "<unknown>" {
+			return m, nil
+		}
+		if m.hasMultipleTagged() {
+			return m, m.deleteBranchMultiCmd(m.taggedRepositories(), branchName)
+		}
+		repos := m.panelRepositories()
+		if len(repos) == 0 {
+			return m, nil
+		}
+		repo := repos[0]
+		if repo.State != nil && repo.State.Branch != nil && repo.State.Branch.Name == branchName {
 			repo.State.Message = "cannot delete current branch"
 			return m, nil
 		}
+		branch := findBranchByName(repo, branchName)
 		return m, m.deleteBranchCmd(repo, branch)
 	}
 
@@ -431,11 +463,7 @@ func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
-	repo := m.currentRepository()
-	if repo == nil {
-		return m, nil
-	}
-	items := remoteBranchItems(repo)
+	items := m.remotePanelItems()
 	count := len(items)
 	if count == 0 {
 		return m, nil
@@ -451,17 +479,35 @@ func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
 	case "end", "G":
 		m.remoteBranchCursor = count - 1
 	case "enter", "c":
-		item := items[clampIndex(m.remoteBranchCursor, count)]
-		return m, m.checkoutRemoteBranchCmd(repo, item)
+		entry := items[clampIndex(m.remoteBranchCursor, count)]
+		if m.hasMultipleTagged() {
+			return m, m.checkoutRemoteBranchMultiCmd(m.taggedRepositories(), entry)
+		}
+		repos := m.panelRepositories()
+		if len(repos) == 0 {
+			return m, nil
+		}
+		return m, m.checkoutRemoteBranchCmd(repos[0], entry)
 	case "d":
-		item := items[clampIndex(m.remoteBranchCursor, count)]
-		return m, m.deleteRemoteBranchCmd(repo, item)
+		entry := items[clampIndex(m.remoteBranchCursor, count)]
+		if m.hasMultipleTagged() {
+			return m, m.deleteRemoteBranchMultiCmd(m.taggedRepositories(), entry)
+		}
+		repos := m.panelRepositories()
+		if len(repos) == 0 {
+			return m, nil
+		}
+		return m, m.deleteRemoteBranchCmd(repos[0], entry)
 	}
 
 	return m, nil
 }
 
 func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
+	if m.hasMultipleTagged() {
+		return m, nil
+	}
+
 	repo := m.currentRepository()
 	if repo == nil || repo.State == nil || repo.State.Branch == nil {
 		return m, nil
@@ -552,16 +598,27 @@ func (m *Model) activatePanel(panel SidePanelType) {
 
 	switch panel {
 	case BranchPanel:
+		items := m.branchPanelItems()
+		currentName := ""
 		if repo != nil && repo.State != nil && repo.State.Branch != nil {
-			if idx := branchIndex(repo.Branches, repo.State.Branch.Name); idx >= 0 {
-				m.branchCursor = idx
+			currentName = repo.State.Branch.Name
+		}
+		for i, item := range items {
+			if item.Name == currentName {
+				m.branchCursor = i
+				break
 			}
 		}
 	case RemotePanel:
+		items := m.remotePanelItems()
+		currentFull := ""
 		if repo != nil && repo.State != nil && repo.State.Branch != nil && repo.State.Branch.Upstream != nil {
-			items := remoteBranchItems(repo)
-			if idx := remoteBranchIndex(items, repo.State.Branch.Upstream.Name); idx >= 0 {
-				m.remoteBranchCursor = idx
+			currentFull = repo.State.Branch.Upstream.Name
+		}
+		for i, item := range items {
+			if item.FullName == currentFull {
+				m.remoteBranchCursor = i
+				break
 			}
 		}
 	case CommitPanel:
@@ -585,21 +642,15 @@ func (m *Model) activatePanel(panel SidePanelType) {
 }
 
 func (m *Model) ensureSelectionWithinBounds(panel SidePanelType) {
-	repo := m.currentRepository()
 	switch panel {
 	case BranchPanel:
-		length := 0
-		if repo != nil {
-			length = len(repo.Branches)
-		}
+		length := len(m.branchPanelItems())
 		m.branchCursor = clampIndex(m.branchCursor, length)
 	case RemotePanel:
-		length := 0
-		if repo != nil {
-			length = len(remoteBranchItems(repo))
-		}
+		length := len(m.remotePanelItems())
 		m.remoteBranchCursor = clampIndex(m.remoteBranchCursor, length)
 	case CommitPanel:
+		repo := m.currentRepository()
 		length := 0
 		if repo != nil && repo.State != nil && repo.State.Branch != nil {
 			length = len(repo.State.Branch.Commits)
@@ -621,6 +672,23 @@ func (m *Model) currentRepository() *git.Repository {
 		return nil
 	}
 	return m.repositories[m.cursor]
+}
+
+func (m *Model) notifyMultiSelectionRestriction(message string) {
+	repos := m.taggedRepositories()
+	if len(repos) == 0 {
+		repo := m.currentRepository()
+		if repo != nil && repo.State != nil {
+			repo.State.Message = message
+		}
+		return
+	}
+	for _, repo := range repos {
+		if repo == nil || repo.State == nil {
+			continue
+		}
+		repo.State.Message = message
+	}
 }
 
 func clampIndex(idx int, length int) int {
@@ -693,12 +761,85 @@ func (m *Model) deleteBranchCmd(repo *git.Repository, branch *git.Branch) tea.Cm
 	}
 }
 
-func (m *Model) checkoutRemoteBranchCmd(repo *git.Repository, item remoteBranchItem) tea.Cmd {
-	if repo == nil || item.branch == nil {
+func (m *Model) checkoutBranchMultiCmd(repos []*git.Repository, branchName string) tea.Cmd {
+	filtered := make([]*git.Repository, 0, len(repos))
+	for _, repo := range repos {
+		if repo != nil {
+			filtered = append(filtered, repo)
+		}
+	}
+	if len(filtered) == 0 || branchName == "" {
 		return nil
 	}
 	return func() tea.Msg {
-		branchName := remoteBranchShortName(item)
+		for _, repo := range filtered {
+			branch := findBranchByName(repo, branchName)
+			if branch == nil {
+				repo.State.Message = fmt.Sprintf("branch %s not found", branchName)
+				return repoActionResultMsg{panel: BranchPanel}
+			}
+		}
+		for _, repo := range filtered {
+			branch := findBranchByName(repo, branchName)
+			repo.State.Message = fmt.Sprintf("checking out %s", branchName)
+			if err := repo.Checkout(branch); err != nil {
+				repo.State.Message = err.Error()
+				return errMsg{err: fmt.Errorf("checkout branch %s in %s: %w", branchName, repo.Name, err)}
+			}
+			repo.State.Message = fmt.Sprintf("switched to %s", branchName)
+			if err := repo.ForceRefresh(); err != nil {
+				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
+			}
+			if repo.State != nil && repo.State.Branch != nil {
+				_ = repo.State.Branch.InitializeCommits(repo)
+			}
+		}
+		return repoActionResultMsg{panel: BranchPanel}
+	}
+}
+
+func (m *Model) deleteBranchMultiCmd(repos []*git.Repository, branchName string) tea.Cmd {
+	filtered := make([]*git.Repository, 0, len(repos))
+	for _, repo := range repos {
+		if repo != nil {
+			filtered = append(filtered, repo)
+		}
+	}
+	if len(filtered) == 0 || branchName == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		for _, repo := range filtered {
+			if repo.State != nil && repo.State.Branch != nil && repo.State.Branch.Name == branchName {
+				repo.State.Message = fmt.Sprintf("cannot delete current branch in %s", repo.Name)
+				return repoActionResultMsg{panel: BranchPanel}
+			}
+		}
+		for _, repo := range filtered {
+			repo.State.Message = fmt.Sprintf("deleting %s", branchName)
+			args := []string{"branch", "-d", branchName}
+			if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+				repo.State.Message = err.Error()
+				return errMsg{err: fmt.Errorf("delete branch %s in %s: %w", branchName, repo.Name, err)}
+			}
+			repo.State.Message = fmt.Sprintf("deleted %s", branchName)
+			if err := repo.ForceRefresh(); err != nil {
+				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
+			}
+			if repo.State != nil && repo.State.Branch != nil {
+				_ = repo.State.Branch.InitializeCommits(repo)
+			}
+		}
+		return repoActionResultMsg{panel: BranchPanel}
+	}
+}
+
+func (m *Model) checkoutRemoteBranchCmd(repo *git.Repository, entry remotePanelEntry) tea.Cmd {
+	if repo == nil || entry.FullName == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		branchName := entry.BranchName
 		repo.State.Message = fmt.Sprintf("checking out %s", branchName)
 		if existing := findBranchByName(repo, branchName); existing != nil {
 			if err := repo.Checkout(existing); err != nil {
@@ -706,10 +847,10 @@ func (m *Model) checkoutRemoteBranchCmd(repo *git.Repository, item remoteBranchI
 				return errMsg{err: fmt.Errorf("checkout branch %s: %w", existing.Name, err)}
 			}
 		} else {
-			args := []string{"checkout", "-b", branchName, item.branch.Name}
+			args := []string{"checkout", "-b", branchName, entry.FullName}
 			if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
 				repo.State.Message = err.Error()
-				return errMsg{err: fmt.Errorf("create branch %s from %s: %w", branchName, item.branch.Name, err)}
+				return errMsg{err: fmt.Errorf("create branch %s from %s: %w", branchName, entry.FullName, err)}
 			}
 		}
 		repo.State.Message = fmt.Sprintf("switched to %s", branchName)
@@ -723,24 +864,90 @@ func (m *Model) checkoutRemoteBranchCmd(repo *git.Repository, item remoteBranchI
 	}
 }
 
-func (m *Model) deleteRemoteBranchCmd(repo *git.Repository, item remoteBranchItem) tea.Cmd {
-	if repo == nil || item.branch == nil || item.remote == nil {
+func (m *Model) deleteRemoteBranchCmd(repo *git.Repository, entry remotePanelEntry) tea.Cmd {
+	if repo == nil || entry.RemoteName == "" || entry.BranchName == "" {
 		return nil
 	}
 	return func() tea.Msg {
-		shortName := remoteBranchShortName(item)
-		repo.State.Message = fmt.Sprintf("deleting %s/%s", item.remote.Name, shortName)
-		args := []string{"push", item.remote.Name, "--delete", shortName}
+		repo.State.Message = fmt.Sprintf("deleting %s/%s", entry.RemoteName, entry.BranchName)
+		args := []string{"push", entry.RemoteName, "--delete", entry.BranchName}
 		if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
 			repo.State.Message = err.Error()
-			return errMsg{err: fmt.Errorf("delete remote branch %s/%s: %w", item.remote.Name, shortName, err)}
+			return errMsg{err: fmt.Errorf("delete remote branch %s/%s: %w", entry.RemoteName, entry.BranchName, err)}
 		}
-		repo.State.Message = fmt.Sprintf("deleted %s/%s", item.remote.Name, shortName)
+		repo.State.Message = fmt.Sprintf("deleted %s/%s", entry.RemoteName, entry.BranchName)
 		if err := repo.ForceRefresh(); err != nil {
 			return errMsg{err: err}
 		}
 		if repo.State != nil && repo.State.Branch != nil {
 			_ = repo.State.Branch.InitializeCommits(repo)
+		}
+		return repoActionResultMsg{panel: RemotePanel}
+	}
+}
+
+func (m *Model) checkoutRemoteBranchMultiCmd(repos []*git.Repository, entry remotePanelEntry) tea.Cmd {
+	filtered := make([]*git.Repository, 0, len(repos))
+	for _, repo := range repos {
+		if repo != nil {
+			filtered = append(filtered, repo)
+		}
+	}
+	if len(filtered) == 0 || entry.FullName == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		for _, repo := range filtered {
+			repo.State.Message = fmt.Sprintf("checking out %s", entry.BranchName)
+			if existing := findBranchByName(repo, entry.BranchName); existing != nil {
+				if err := repo.Checkout(existing); err != nil {
+					repo.State.Message = err.Error()
+					return errMsg{err: fmt.Errorf("checkout branch %s in %s: %w", entry.BranchName, repo.Name, err)}
+				}
+			} else {
+				args := []string{"checkout", "-b", entry.BranchName, entry.FullName}
+				if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+					repo.State.Message = err.Error()
+					return errMsg{err: fmt.Errorf("create branch %s from %s in %s: %w", entry.BranchName, entry.FullName, repo.Name, err)}
+				}
+			}
+			repo.State.Message = fmt.Sprintf("switched to %s", entry.BranchName)
+			if err := repo.ForceRefresh(); err != nil {
+				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
+			}
+			if repo.State != nil && repo.State.Branch != nil {
+				_ = repo.State.Branch.InitializeCommits(repo)
+			}
+		}
+		return repoActionResultMsg{panel: RemotePanel}
+	}
+}
+
+func (m *Model) deleteRemoteBranchMultiCmd(repos []*git.Repository, entry remotePanelEntry) tea.Cmd {
+	filtered := make([]*git.Repository, 0, len(repos))
+	for _, repo := range repos {
+		if repo != nil {
+			filtered = append(filtered, repo)
+		}
+	}
+	if len(filtered) == 0 || entry.RemoteName == "" || entry.BranchName == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		for _, repo := range filtered {
+			repo.State.Message = fmt.Sprintf("deleting %s/%s", entry.RemoteName, entry.BranchName)
+			args := []string{"push", entry.RemoteName, "--delete", entry.BranchName}
+			if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+				repo.State.Message = err.Error()
+				return errMsg{err: fmt.Errorf("delete remote branch %s/%s in %s: %w", entry.RemoteName, entry.BranchName, repo.Name, err)}
+			}
+			repo.State.Message = fmt.Sprintf("deleted %s/%s", entry.RemoteName, entry.BranchName)
+			if err := repo.ForceRefresh(); err != nil {
+				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
+			}
+			if repo.State != nil && repo.State.Branch != nil {
+				_ = repo.State.Branch.InitializeCommits(repo)
+			}
 		}
 		return repoActionResultMsg{panel: RemotePanel}
 	}

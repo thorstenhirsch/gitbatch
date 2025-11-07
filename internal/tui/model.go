@@ -86,6 +86,8 @@ var (
 	modes = []Mode{fetchMode, pullMode, mergeMode}
 )
 
+var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}
+
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
 	App            lipgloss.Style
@@ -139,7 +141,7 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#1976D2", Dark: "#64B5F6"}).
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}),
+			Foreground(tagHighlightColor),
 		WorkingItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#0097A7", Dark: "#4DD0E1"}),
 		SuccessItem: lipgloss.NewStyle().
@@ -149,7 +151,7 @@ func DefaultStyles() *Styles {
 		BranchInfo: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#00796B", Dark: "#4DB6AC"}),
 		KeyBinding: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}).
+			Foreground(tagHighlightColor).
 			Bold(true),
 		Panel: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).

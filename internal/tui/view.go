@@ -516,10 +516,18 @@ func (m *Model) renderFocus() string {
 
 	switch m.sidePanel {
 	case BranchPanel:
-		panelTitle = "Branches"
+		if m.hasMultipleTagged() {
+			panelTitle = "Common Branches"
+		} else {
+			panelTitle = "Branches"
+		}
 		panelContent = m.renderBranches(r)
 	case RemotePanel:
-		panelTitle = "Remotes"
+		if m.hasMultipleTagged() {
+			panelTitle = "Common Remote Branches"
+		} else {
+			panelTitle = "Remotes"
+		}
 		panelContent = m.renderRemotes(r)
 	case CommitPanel:
 		panelTitle = "Commits"
@@ -540,7 +548,13 @@ func (m *Model) renderFocus() string {
 		"",
 		panelContent,
 	)
-	styledPanel := m.styles.Panel.Render(panel)
+
+	panelStyle := m.styles.Panel
+	if (m.sidePanel == BranchPanel || m.sidePanel == RemotePanel) && m.hasMultipleTagged() {
+		panelStyle = panelStyle.Copy().BorderForeground(tagHighlightColor)
+	}
+
+	styledPanel := panelStyle.Render(panel)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, mainInfo, "  ", styledPanel)
 }
@@ -578,17 +592,16 @@ func (m *Model) renderRepositoryInfo(r *git.Repository) string {
 
 // renderBranches renders branch list
 func (m *Model) renderBranches(r *git.Repository) string {
-	if r == nil {
-		return "No repository selected"
-	}
-
-	branches := r.Branches
-	if len(branches) == 0 {
+	items := m.branchPanelItems()
+	if len(items) == 0 {
+		if m.hasMultipleTagged() {
+			return "No common branches"
+		}
 		return "No branches"
 	}
 
 	cursor := m.branchCursor
-	if cursor < 0 || cursor >= len(branches) {
+	if cursor < 0 || cursor >= len(items) {
 		cursor = 0
 	}
 
@@ -599,16 +612,12 @@ func (m *Model) renderBranches(r *git.Repository) string {
 	))
 	lines = append(lines, "")
 
-	for i, b := range branches {
-		name := "<unknown>"
+	for i, item := range items {
 		prefix := "  "
-		if b != nil {
-			name = b.Name
-			if r.State != nil && r.State.Branch != nil && b.Name == r.State.Branch.Name {
-				prefix = "→ "
-			}
+		if item.IsCurrent {
+			prefix = "→ "
 		}
-		line := prefix + name
+		line := prefix + item.Name
 		if i == cursor {
 			lines = append(lines, m.styles.SelectedItem.Render(line))
 		} else {
@@ -621,12 +630,11 @@ func (m *Model) renderBranches(r *git.Repository) string {
 
 // renderRemotes renders remote list
 func (m *Model) renderRemotes(r *git.Repository) string {
-	if r == nil {
-		return "No repository selected"
-	}
-
-	items := remoteBranchItems(r)
+	items := m.remotePanelItems()
 	if len(items) == 0 {
+		if m.hasMultipleTagged() {
+			return "No common remote branches"
+		}
 		return "No remote branches"
 	}
 
@@ -643,15 +651,7 @@ func (m *Model) renderRemotes(r *git.Repository) string {
 	lines = append(lines, "")
 
 	for i, item := range items {
-		remoteName := "?"
-		if item.remote != nil {
-			remoteName = item.remote.Name
-		}
-		branchName := ""
-		if item.branch != nil {
-			branchName = remoteBranchShortName(item)
-		}
-		line := fmt.Sprintf("%s %s", remoteName, branchName)
+		line := fmt.Sprintf("%s %s", item.RemoteName, item.BranchName)
 		if i == cursor {
 			lines = append(lines, m.styles.SelectedItem.Render(line))
 		} else {
@@ -664,6 +664,10 @@ func (m *Model) renderRemotes(r *git.Repository) string {
 
 // renderCommits renders commit list
 func (m *Model) renderCommits(r *git.Repository) string {
+	if m.hasMultipleTagged() {
+		return "Commit view unavailable when multiple repositories are tagged"
+	}
+
 	if r == nil || r.State == nil || r.State.Branch == nil {
 		return "No branch selected"
 	}
