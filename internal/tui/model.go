@@ -27,9 +27,13 @@ type Model struct {
 	err         error
 
 	// View state
-	currentView ViewType
-	sidePanel   SidePanelType
-	showHelp    bool
+	currentView        ViewType
+	sidePanel          SidePanelType
+	showHelp           bool
+	branchCursor       int
+	remoteBranchCursor int
+	commitCursor       int
+	commitOffset       int
 
 	// Styles
 	styles *Styles
@@ -207,3 +211,8 @@ type lazygitClosedMsg struct{}
 
 // jobCompletedMsg is sent when a job completes (success or failure)
 type jobCompletedMsg struct{}
+
+// repoActionResultMsg is sent when a focus view action updates repository state
+type repoActionResultMsg struct {
+	panel SidePanelType
+}

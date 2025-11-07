@@ -578,19 +578,42 @@ func (m *Model) renderRepositoryInfo(r *git.Repository) string {
 
 // renderBranches renders branch list
 func (m *Model) renderBranches(r *git.Repository) string {
-	branches := r.Branches
-
-	var lines []string
-	for _, b := range branches {
-		prefix := "  "
-		if b.Name == r.State.Branch.Name {
-			prefix = "→ "
-		}
-		lines = append(lines, prefix+b.Name)
+	if r == nil {
+		return "No repository selected"
 	}
 
-	if len(lines) == 0 {
+	branches := r.Branches
+	if len(branches) == 0 {
 		return "No branches"
+	}
+
+	cursor := m.branchCursor
+	if cursor < 0 || cursor >= len(branches) {
+		cursor = 0
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("%s checkout  %s delete",
+		m.styles.KeyBinding.Render("[enter]"),
+		m.styles.KeyBinding.Render("[d]"),
+	))
+	lines = append(lines, "")
+
+	for i, b := range branches {
+		name := "<unknown>"
+		prefix := "  "
+		if b != nil {
+			name = b.Name
+			if r.State != nil && r.State.Branch != nil && b.Name == r.State.Branch.Name {
+				prefix = "→ "
+			}
+		}
+		line := prefix + name
+		if i == cursor {
+			lines = append(lines, m.styles.SelectedItem.Render(line))
+		} else {
+			lines = append(lines, line)
+		}
 	}
 
 	return strings.Join(lines, "\n")
@@ -598,15 +621,42 @@ func (m *Model) renderBranches(r *git.Repository) string {
 
 // renderRemotes renders remote list
 func (m *Model) renderRemotes(r *git.Repository) string {
-	remotes := r.Remotes
-
-	var lines []string
-	for _, remote := range remotes {
-		lines = append(lines, remote.Name)
+	if r == nil {
+		return "No repository selected"
 	}
 
-	if len(lines) == 0 {
-		return "No remotes"
+	items := remoteBranchItems(r)
+	if len(items) == 0 {
+		return "No remote branches"
+	}
+
+	cursor := m.remoteBranchCursor
+	if cursor < 0 || cursor >= len(items) {
+		cursor = 0
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("%s checkout  %s delete",
+		m.styles.KeyBinding.Render("[enter]"),
+		m.styles.KeyBinding.Render("[d]"),
+	))
+	lines = append(lines, "")
+
+	for i, item := range items {
+		remoteName := "?"
+		if item.remote != nil {
+			remoteName = item.remote.Name
+		}
+		branchName := ""
+		if item.branch != nil {
+			branchName = remoteBranchShortName(item)
+		}
+		line := fmt.Sprintf("%s %s", remoteName, branchName)
+		if i == cursor {
+			lines = append(lines, m.styles.SelectedItem.Render(line))
+		} else {
+			lines = append(lines, line)
+		}
 	}
 
 	return strings.Join(lines, "\n")
@@ -614,36 +664,82 @@ func (m *Model) renderRemotes(r *git.Repository) string {
 
 // renderCommits renders commit list
 func (m *Model) renderCommits(r *git.Repository) string {
-	if r.State.Branch == nil {
+	if r == nil || r.State == nil || r.State.Branch == nil {
 		return "No branch selected"
 	}
 
 	commits := r.State.Branch.Commits
 
-	var lines []string
-	for i, commit := range commits {
-		if i >= 10 { // Limit to 10 commits
-			break
-		}
-		hash := commit.Hash
-		if len(hash) > 7 {
-			hash = hash[:7]
-		}
-		message := commit.Message
-		if len(message) > 50 {
-			message = message[:47] + "..."
-		}
-		// Remove newlines from message
-		message = strings.ReplaceAll(message, "\n", " ")
-		message = strings.ReplaceAll(message, "\r", " ")
-
-		lines = append(lines, fmt.Sprintf("%s %s",
-			lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00")).Render(hash),
-			message))
+	count := len(commits)
+	if count == 0 {
+		return "No commits"
 	}
 
-	if len(lines) == 0 {
-		return "No commits"
+	viewport := m.commitViewportSize()
+	if viewport > count {
+		viewport = count
+	}
+	m.ensureCommitCursorVisible(count, viewport)
+
+	start := m.commitOffset
+	if start < 0 {
+		start = 0
+	}
+	maxStart := count - viewport
+	if maxStart < 0 {
+		maxStart = 0
+	}
+	if start > maxStart {
+		start = maxStart
+	}
+	end := start + viewport
+	if end > count {
+		end = count
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("%s checkout  %s soft reset  %s mixed reset  %s hard reset",
+		m.styles.KeyBinding.Render("[enter]"),
+		m.styles.KeyBinding.Render("[s]"),
+		m.styles.KeyBinding.Render("[m]"),
+		m.styles.KeyBinding.Render("[h]"),
+	))
+	lines = append(lines, "")
+
+	if start > 0 {
+		lines = append(lines, m.styles.Help.Render("  ↑ more above"))
+	}
+
+	for i := start; i < end; i++ {
+		commit := commits[i]
+		label := ""
+		hash := "(none)"
+		message := ""
+		if commit != nil {
+			switch commit.CommitType {
+			case git.LocalCommit:
+				label = "[local] "
+			case git.RemoteCommit:
+				label = "[remote] "
+			}
+			hash = shortHash(commit.Hash)
+			message = firstLine(commit.Message)
+			if len(message) > 60 {
+				message = truncateString(message, 60)
+			}
+			message = strings.ReplaceAll(message, "\n", " ")
+			message = strings.ReplaceAll(message, "\r", " ")
+		}
+		line := fmt.Sprintf("%s%s %s", label, hash, message)
+		if i == m.commitCursor {
+			lines = append(lines, m.styles.SelectedItem.Render(line))
+		} else {
+			lines = append(lines, line)
+		}
+	}
+
+	if end < count {
+		lines = append(lines, m.styles.Help.Render("  ↓ more below"))
 	}
 
 	return strings.Join(lines, "\n")

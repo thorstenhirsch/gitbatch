@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os/exec"
 	"sort"
 
@@ -51,6 +52,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.jobsRunning = false
 			return m, nil
 		}
+
+	case repoActionResultMsg:
+		m.ensureSelectionWithinBounds(msg.panel)
+		return m, nil
 
 	case errMsg:
 		m.err = msg.err
@@ -189,24 +194,19 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cycleMode()
 
 	case "b":
-		m.sidePanel = BranchPanel
-		m.currentView = FocusView
+		m.activatePanel(BranchPanel)
 
 	case "c":
-		m.sidePanel = CommitPanel
-		m.currentView = FocusView
+		m.activatePanel(CommitPanel)
 
 	case "r":
-		m.sidePanel = RemotePanel
-		m.currentView = FocusView
+		m.activatePanel(RemotePanel)
 
 	case "s":
-		m.sidePanel = StatusPanel
-		m.currentView = FocusView
+		m.activatePanel(StatusPanel)
 
 	case "S":
-		m.sidePanel = StashPanel
-		m.currentView = FocusView
+		m.activatePanel(StashPanel)
 
 	case "n":
 		m.sortByName()
@@ -220,14 +220,25 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleFocusKeys processes keys in focus mode
 func (m *Model) handleFocusKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	key := msg.String()
+
+	switch key {
 	case "esc", "backspace":
-		// Return to overview
 		m.currentView = OverviewView
 		m.sidePanel = NonePanel
+		return m, nil
 	}
 
-	return m, nil
+	switch m.sidePanel {
+	case BranchPanel:
+		return m.handleBranchPanelKey(key)
+	case RemotePanel:
+		return m.handleRemotePanelKey(key)
+	case CommitPanel:
+		return m.handleCommitPanelKey(key)
+	default:
+		return m, nil
+	}
 }
 
 // addRepository adds a repository to the model in sorted order
@@ -383,4 +394,451 @@ func (m *Model) sortByName() {
 // sortByTime sorts repositories by last modified time
 func (m *Model) sortByTime() {
 	sort.Sort(git.LastModified(m.repositories))
+}
+
+func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
+	repo := m.currentRepository()
+	if repo == nil {
+		return m, nil
+	}
+	count := len(repo.Branches)
+	if count == 0 {
+		return m, nil
+	}
+
+	switch key {
+	case "up", "k":
+		wrapCursor(&m.branchCursor, count, -1)
+	case "down", "j":
+		wrapCursor(&m.branchCursor, count, 1)
+	case "home", "g":
+		m.branchCursor = 0
+	case "end", "G":
+		m.branchCursor = count - 1
+	case "enter", "c":
+		branch := repo.Branches[clampIndex(m.branchCursor, count)]
+		return m, m.checkoutBranchCmd(repo, branch)
+	case "d":
+		branch := repo.Branches[clampIndex(m.branchCursor, count)]
+		if repo.State != nil && repo.State.Branch != nil && branch != nil && branch.Name == repo.State.Branch.Name {
+			repo.State.Message = "cannot delete current branch"
+			return m, nil
+		}
+		return m, m.deleteBranchCmd(repo, branch)
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
+	repo := m.currentRepository()
+	if repo == nil {
+		return m, nil
+	}
+	items := remoteBranchItems(repo)
+	count := len(items)
+	if count == 0 {
+		return m, nil
+	}
+
+	switch key {
+	case "up", "k":
+		wrapCursor(&m.remoteBranchCursor, count, -1)
+	case "down", "j":
+		wrapCursor(&m.remoteBranchCursor, count, 1)
+	case "home", "g":
+		m.remoteBranchCursor = 0
+	case "end", "G":
+		m.remoteBranchCursor = count - 1
+	case "enter", "c":
+		item := items[clampIndex(m.remoteBranchCursor, count)]
+		return m, m.checkoutRemoteBranchCmd(repo, item)
+	case "d":
+		item := items[clampIndex(m.remoteBranchCursor, count)]
+		return m, m.deleteRemoteBranchCmd(repo, item)
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
+	repo := m.currentRepository()
+	if repo == nil || repo.State == nil || repo.State.Branch == nil {
+		return m, nil
+	}
+
+	if len(repo.State.Branch.Commits) == 0 {
+		if err := repo.State.Branch.InitializeCommits(repo); err != nil {
+			repo.State.Message = err.Error()
+			return m, nil
+		}
+	}
+
+	commits := repo.State.Branch.Commits
+	count := len(commits)
+	if count == 0 {
+		return m, nil
+	}
+	viewport := m.commitViewportSize()
+	if viewport > count {
+		viewport = count
+	}
+
+	switch key {
+	case "up", "k":
+		wrapCursor(&m.commitCursor, count, -1)
+	case "down", "j":
+		wrapCursor(&m.commitCursor, count, 1)
+	case "home", "g":
+		m.commitCursor = 0
+	case "end", "G":
+		m.commitCursor = count - 1
+	case "ctrl+f", "pgdown":
+		m.commitCursor += viewport
+		if m.commitCursor >= count {
+			m.commitCursor = count - 1
+		}
+	case "ctrl+b", "pgup":
+		m.commitCursor -= viewport
+		if m.commitCursor < 0 {
+			m.commitCursor = 0
+		}
+	case "ctrl+d":
+		half := viewport / 2
+		if half < 1 {
+			half = 1
+		}
+		m.commitCursor += half
+		if m.commitCursor >= count {
+			m.commitCursor = count - 1
+		}
+	case "ctrl+u":
+		half := viewport / 2
+		if half < 1 {
+			half = 1
+		}
+		m.commitCursor -= half
+		if m.commitCursor < 0 {
+			m.commitCursor = 0
+		}
+	case "enter", "c":
+		commit := commits[clampIndex(m.commitCursor, count)]
+		return m, m.checkoutCommitCmd(repo, commit)
+	case "s":
+		commit := commits[clampIndex(m.commitCursor, count)]
+		return m, m.resetToCommitCmd(repo, commit, command.ResetSoft)
+	case "m":
+		commit := commits[clampIndex(m.commitCursor, count)]
+		return m, m.resetToCommitCmd(repo, commit, command.ResetMixed)
+	case "h":
+		commit := commits[clampIndex(m.commitCursor, count)]
+		return m, m.resetToCommitCmd(repo, commit, command.ResetHard)
+	}
+
+	m.ensureCommitCursorVisible(count, viewport)
+
+	return m, nil
+}
+
+func (m *Model) activatePanel(panel SidePanelType) {
+	m.sidePanel = panel
+	if panel == NonePanel {
+		m.currentView = OverviewView
+		return
+	}
+
+	m.currentView = FocusView
+	repo := m.currentRepository()
+
+	switch panel {
+	case BranchPanel:
+		if repo != nil && repo.State != nil && repo.State.Branch != nil {
+			if idx := branchIndex(repo.Branches, repo.State.Branch.Name); idx >= 0 {
+				m.branchCursor = idx
+			}
+		}
+	case RemotePanel:
+		if repo != nil && repo.State != nil && repo.State.Branch != nil && repo.State.Branch.Upstream != nil {
+			items := remoteBranchItems(repo)
+			if idx := remoteBranchIndex(items, repo.State.Branch.Upstream.Name); idx >= 0 {
+				m.remoteBranchCursor = idx
+			}
+		}
+	case CommitPanel:
+		if repo != nil && repo.State != nil && repo.State.Branch != nil {
+			if len(repo.State.Branch.Commits) == 0 {
+				_ = repo.State.Branch.InitializeCommits(repo)
+			}
+			if len(repo.State.Branch.Commits) > 0 {
+				m.commitOffset = 0
+				m.commitCursor = clampIndex(m.commitCursor, len(repo.State.Branch.Commits))
+				viewport := m.commitViewportSize()
+				if viewport > len(repo.State.Branch.Commits) {
+					viewport = len(repo.State.Branch.Commits)
+				}
+				m.ensureCommitCursorVisible(len(repo.State.Branch.Commits), viewport)
+			}
+		}
+	}
+
+	m.ensureSelectionWithinBounds(panel)
+}
+
+func (m *Model) ensureSelectionWithinBounds(panel SidePanelType) {
+	repo := m.currentRepository()
+	switch panel {
+	case BranchPanel:
+		length := 0
+		if repo != nil {
+			length = len(repo.Branches)
+		}
+		m.branchCursor = clampIndex(m.branchCursor, length)
+	case RemotePanel:
+		length := 0
+		if repo != nil {
+			length = len(remoteBranchItems(repo))
+		}
+		m.remoteBranchCursor = clampIndex(m.remoteBranchCursor, length)
+	case CommitPanel:
+		length := 0
+		if repo != nil && repo.State != nil && repo.State.Branch != nil {
+			length = len(repo.State.Branch.Commits)
+		}
+		m.commitCursor = clampIndex(m.commitCursor, length)
+		viewport := m.commitViewportSize()
+		if viewport > length {
+			viewport = length
+		}
+		m.ensureCommitCursorVisible(length, viewport)
+	}
+}
+
+func (m *Model) currentRepository() *git.Repository {
+	if len(m.repositories) == 0 {
+		return nil
+	}
+	if m.cursor < 0 || m.cursor >= len(m.repositories) {
+		return nil
+	}
+	return m.repositories[m.cursor]
+}
+
+func clampIndex(idx int, length int) int {
+	if length <= 0 {
+		return 0
+	}
+	if idx < 0 {
+		return 0
+	}
+	if idx >= length {
+		return length - 1
+	}
+	return idx
+}
+
+func wrapCursor(cursor *int, length int, delta int) {
+	if length <= 0 {
+		*cursor = 0
+		return
+	}
+	*cursor += delta
+	for *cursor < 0 {
+		*cursor += length
+	}
+	for *cursor >= length {
+		*cursor -= length
+	}
+}
+
+func (m *Model) checkoutBranchCmd(repo *git.Repository, branch *git.Branch) tea.Cmd {
+	if repo == nil || branch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		repo.State.Message = fmt.Sprintf("checking out %s", branch.Name)
+		if err := repo.Checkout(branch); err != nil {
+			repo.State.Message = err.Error()
+			return errMsg{err: fmt.Errorf("checkout branch %s: %w", branch.Name, err)}
+		}
+		repo.State.Message = fmt.Sprintf("switched to %s", branch.Name)
+		if err := repo.ForceRefresh(); err != nil {
+			return errMsg{err: err}
+		}
+		if repo.State != nil && repo.State.Branch != nil {
+			_ = repo.State.Branch.InitializeCommits(repo)
+		}
+		return repoActionResultMsg{panel: BranchPanel}
+	}
+}
+
+func (m *Model) deleteBranchCmd(repo *git.Repository, branch *git.Branch) tea.Cmd {
+	if repo == nil || branch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		repo.State.Message = fmt.Sprintf("deleting %s", branch.Name)
+		args := []string{"branch", "-d", branch.Name}
+		if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+			repo.State.Message = err.Error()
+			return errMsg{err: fmt.Errorf("delete branch %s: %w", branch.Name, err)}
+		}
+		repo.State.Message = fmt.Sprintf("deleted %s", branch.Name)
+		if err := repo.ForceRefresh(); err != nil {
+			return errMsg{err: err}
+		}
+		if repo.State != nil && repo.State.Branch != nil {
+			_ = repo.State.Branch.InitializeCommits(repo)
+		}
+		return repoActionResultMsg{panel: BranchPanel}
+	}
+}
+
+func (m *Model) checkoutRemoteBranchCmd(repo *git.Repository, item remoteBranchItem) tea.Cmd {
+	if repo == nil || item.branch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		branchName := remoteBranchShortName(item)
+		repo.State.Message = fmt.Sprintf("checking out %s", branchName)
+		if existing := findBranchByName(repo, branchName); existing != nil {
+			if err := repo.Checkout(existing); err != nil {
+				repo.State.Message = err.Error()
+				return errMsg{err: fmt.Errorf("checkout branch %s: %w", existing.Name, err)}
+			}
+		} else {
+			args := []string{"checkout", "-b", branchName, item.branch.Name}
+			if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+				repo.State.Message = err.Error()
+				return errMsg{err: fmt.Errorf("create branch %s from %s: %w", branchName, item.branch.Name, err)}
+			}
+		}
+		repo.State.Message = fmt.Sprintf("switched to %s", branchName)
+		if err := repo.ForceRefresh(); err != nil {
+			return errMsg{err: err}
+		}
+		if repo.State != nil && repo.State.Branch != nil {
+			_ = repo.State.Branch.InitializeCommits(repo)
+		}
+		return repoActionResultMsg{panel: RemotePanel}
+	}
+}
+
+func (m *Model) deleteRemoteBranchCmd(repo *git.Repository, item remoteBranchItem) tea.Cmd {
+	if repo == nil || item.branch == nil || item.remote == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		shortName := remoteBranchShortName(item)
+		repo.State.Message = fmt.Sprintf("deleting %s/%s", item.remote.Name, shortName)
+		args := []string{"push", item.remote.Name, "--delete", shortName}
+		if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+			repo.State.Message = err.Error()
+			return errMsg{err: fmt.Errorf("delete remote branch %s/%s: %w", item.remote.Name, shortName, err)}
+		}
+		repo.State.Message = fmt.Sprintf("deleted %s/%s", item.remote.Name, shortName)
+		if err := repo.ForceRefresh(); err != nil {
+			return errMsg{err: err}
+		}
+		if repo.State != nil && repo.State.Branch != nil {
+			_ = repo.State.Branch.InitializeCommits(repo)
+		}
+		return repoActionResultMsg{panel: RemotePanel}
+	}
+}
+
+func (m *Model) checkoutCommitCmd(repo *git.Repository, commit *git.Commit) tea.Cmd {
+	if repo == nil || commit == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		repo.State.Message = fmt.Sprintf("checking out %s", shortHash(commit.Hash))
+		args := []string{"checkout", commit.Hash}
+		if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+			repo.State.Message = err.Error()
+			return errMsg{err: fmt.Errorf("checkout commit %s: %w", commit.Hash, err)}
+		}
+		repo.State.Message = fmt.Sprintf("checked out %s", shortHash(commit.Hash))
+		if err := repo.ForceRefresh(); err != nil {
+			return errMsg{err: err}
+		}
+		if repo.State != nil && repo.State.Branch != nil {
+			_ = repo.State.Branch.InitializeCommits(repo)
+		}
+		return repoActionResultMsg{panel: CommitPanel}
+	}
+}
+
+func (m *Model) resetToCommitCmd(repo *git.Repository, commit *git.Commit, resetType command.ResetType) tea.Cmd {
+	if repo == nil || commit == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		repo.State.Message = fmt.Sprintf("reset --%s %s", resetType, shortHash(commit.Hash))
+		args := []string{"reset", "--" + string(resetType), commit.Hash}
+		if _, err := command.Run(repo.AbsPath, "git", args); err != nil {
+			repo.State.Message = err.Error()
+			return errMsg{err: fmt.Errorf("reset --%s %s: %w", resetType, commit.Hash, err)}
+		}
+		repo.State.Message = fmt.Sprintf("reset --%s %s", resetType, shortHash(commit.Hash))
+		if err := repo.ForceRefresh(); err != nil {
+			return errMsg{err: err}
+		}
+		if repo.State != nil && repo.State.Branch != nil {
+			_ = repo.State.Branch.InitializeCommits(repo)
+		}
+		return repoActionResultMsg{panel: CommitPanel}
+	}
+}
+
+func (m *Model) commitViewportSize() int {
+	height := m.height
+	if height <= 0 {
+		height = 24
+	}
+	viewport := height - 8
+	if viewport < 1 {
+		viewport = 1
+	}
+	return viewport
+}
+
+func (m *Model) ensureCommitCursorVisible(total, viewport int) {
+	if total <= 0 {
+		m.commitCursor = 0
+		m.commitOffset = 0
+		return
+	}
+	if m.commitCursor < 0 {
+		m.commitCursor = 0
+	}
+	if m.commitCursor >= total {
+		m.commitCursor = total - 1
+	}
+	if viewport <= 0 {
+		viewport = 1
+	}
+	if viewport > total {
+		viewport = total
+	}
+	maxOffset := total - viewport
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.commitOffset < 0 {
+		m.commitOffset = 0
+	}
+	if m.commitOffset > maxOffset {
+		m.commitOffset = maxOffset
+	}
+	if m.commitCursor < m.commitOffset {
+		m.commitOffset = m.commitCursor
+	} else if m.commitCursor >= m.commitOffset+viewport {
+		m.commitOffset = m.commitCursor - viewport + 1
+	}
+	if m.commitOffset < 0 {
+		m.commitOffset = 0
+	}
+	if m.commitOffset > maxOffset {
+		m.commitOffset = maxOffset
+	}
 }
