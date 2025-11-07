@@ -551,7 +551,18 @@ func (m *Model) renderFocus() string {
 
 	panelStyle := m.styles.Panel
 	if (m.sidePanel == BranchPanel || m.sidePanel == RemotePanel) && m.hasMultipleTagged() {
-		panelStyle = panelStyle.Copy().BorderForeground(tagHighlightColor)
+		var panelHasItems bool
+		switch m.sidePanel {
+		case BranchPanel:
+			panelHasItems = len(m.branchPanelItems()) > 0
+		case RemotePanel:
+			panelHasItems = len(m.remotePanelItems()) > 0
+		}
+		borderColor := tagHighlightColor
+		if !panelHasItems {
+			borderColor = tagWarningColor
+		}
+		panelStyle = panelStyle.Copy().BorderForeground(borderColor)
 	}
 
 	styledPanel := panelStyle.Render(panel)

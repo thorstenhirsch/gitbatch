@@ -729,11 +729,8 @@ func (m *Model) checkoutBranchCmd(repo *git.Repository, branch *git.Branch) tea.
 			return errMsg{err: fmt.Errorf("checkout branch %s: %w", branch.Name, err)}
 		}
 		repo.State.Message = fmt.Sprintf("switched to %s", branch.Name)
-		if err := repo.ForceRefresh(); err != nil {
+		if err := refreshBranchState(repo); err != nil {
 			return errMsg{err: err}
-		}
-		if repo.State != nil && repo.State.Branch != nil {
-			_ = repo.State.Branch.InitializeCommits(repo)
 		}
 		return repoActionResultMsg{panel: BranchPanel}
 	}
@@ -751,47 +748,38 @@ func (m *Model) deleteBranchCmd(repo *git.Repository, branch *git.Branch) tea.Cm
 			return errMsg{err: fmt.Errorf("delete branch %s: %w", branch.Name, err)}
 		}
 		repo.State.Message = fmt.Sprintf("deleted %s", branch.Name)
-		if err := repo.ForceRefresh(); err != nil {
+		if err := refreshBranchState(repo); err != nil {
 			return errMsg{err: err}
-		}
-		if repo.State != nil && repo.State.Branch != nil {
-			_ = repo.State.Branch.InitializeCommits(repo)
 		}
 		return repoActionResultMsg{panel: BranchPanel}
 	}
 }
 
 func (m *Model) checkoutBranchMultiCmd(repos []*git.Repository, branchName string) tea.Cmd {
-	filtered := make([]*git.Repository, 0, len(repos))
-	for _, repo := range repos {
-		if repo != nil {
-			filtered = append(filtered, repo)
-		}
-	}
+	filtered := filterRepositories(repos)
 	if len(filtered) == 0 || branchName == "" {
 		return nil
 	}
 	return func() tea.Msg {
+		branchLookup := make(map[*git.Repository]*git.Branch, len(filtered))
 		for _, repo := range filtered {
 			branch := findBranchByName(repo, branchName)
 			if branch == nil {
 				repo.State.Message = fmt.Sprintf("branch %s not found", branchName)
 				return repoActionResultMsg{panel: BranchPanel}
 			}
+			branchLookup[repo] = branch
 		}
 		for _, repo := range filtered {
-			branch := findBranchByName(repo, branchName)
+			branch := branchLookup[repo]
 			repo.State.Message = fmt.Sprintf("checking out %s", branchName)
 			if err := repo.Checkout(branch); err != nil {
 				repo.State.Message = err.Error()
 				return errMsg{err: fmt.Errorf("checkout branch %s in %s: %w", branchName, repo.Name, err)}
 			}
 			repo.State.Message = fmt.Sprintf("switched to %s", branchName)
-			if err := repo.ForceRefresh(); err != nil {
+			if err := refreshBranchState(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
-			}
-			if repo.State != nil && repo.State.Branch != nil {
-				_ = repo.State.Branch.InitializeCommits(repo)
 			}
 		}
 		return repoActionResultMsg{panel: BranchPanel}
@@ -799,12 +787,7 @@ func (m *Model) checkoutBranchMultiCmd(repos []*git.Repository, branchName strin
 }
 
 func (m *Model) deleteBranchMultiCmd(repos []*git.Repository, branchName string) tea.Cmd {
-	filtered := make([]*git.Repository, 0, len(repos))
-	for _, repo := range repos {
-		if repo != nil {
-			filtered = append(filtered, repo)
-		}
-	}
+	filtered := filterRepositories(repos)
 	if len(filtered) == 0 || branchName == "" {
 		return nil
 	}
@@ -823,11 +806,8 @@ func (m *Model) deleteBranchMultiCmd(repos []*git.Repository, branchName string)
 				return errMsg{err: fmt.Errorf("delete branch %s in %s: %w", branchName, repo.Name, err)}
 			}
 			repo.State.Message = fmt.Sprintf("deleted %s", branchName)
-			if err := repo.ForceRefresh(); err != nil {
+			if err := refreshBranchState(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
-			}
-			if repo.State != nil && repo.State.Branch != nil {
-				_ = repo.State.Branch.InitializeCommits(repo)
 			}
 		}
 		return repoActionResultMsg{panel: BranchPanel}
@@ -854,11 +834,8 @@ func (m *Model) checkoutRemoteBranchCmd(repo *git.Repository, entry remotePanelE
 			}
 		}
 		repo.State.Message = fmt.Sprintf("switched to %s", branchName)
-		if err := repo.ForceRefresh(); err != nil {
+		if err := refreshBranchState(repo); err != nil {
 			return errMsg{err: err}
-		}
-		if repo.State != nil && repo.State.Branch != nil {
-			_ = repo.State.Branch.InitializeCommits(repo)
 		}
 		return repoActionResultMsg{panel: RemotePanel}
 	}
@@ -876,23 +853,15 @@ func (m *Model) deleteRemoteBranchCmd(repo *git.Repository, entry remotePanelEnt
 			return errMsg{err: fmt.Errorf("delete remote branch %s/%s: %w", entry.RemoteName, entry.BranchName, err)}
 		}
 		repo.State.Message = fmt.Sprintf("deleted %s/%s", entry.RemoteName, entry.BranchName)
-		if err := repo.ForceRefresh(); err != nil {
+		if err := refreshBranchState(repo); err != nil {
 			return errMsg{err: err}
-		}
-		if repo.State != nil && repo.State.Branch != nil {
-			_ = repo.State.Branch.InitializeCommits(repo)
 		}
 		return repoActionResultMsg{panel: RemotePanel}
 	}
 }
 
 func (m *Model) checkoutRemoteBranchMultiCmd(repos []*git.Repository, entry remotePanelEntry) tea.Cmd {
-	filtered := make([]*git.Repository, 0, len(repos))
-	for _, repo := range repos {
-		if repo != nil {
-			filtered = append(filtered, repo)
-		}
-	}
+	filtered := filterRepositories(repos)
 	if len(filtered) == 0 || entry.FullName == "" {
 		return nil
 	}
@@ -912,11 +881,8 @@ func (m *Model) checkoutRemoteBranchMultiCmd(repos []*git.Repository, entry remo
 				}
 			}
 			repo.State.Message = fmt.Sprintf("switched to %s", entry.BranchName)
-			if err := repo.ForceRefresh(); err != nil {
+			if err := refreshBranchState(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
-			}
-			if repo.State != nil && repo.State.Branch != nil {
-				_ = repo.State.Branch.InitializeCommits(repo)
 			}
 		}
 		return repoActionResultMsg{panel: RemotePanel}
@@ -924,12 +890,7 @@ func (m *Model) checkoutRemoteBranchMultiCmd(repos []*git.Repository, entry remo
 }
 
 func (m *Model) deleteRemoteBranchMultiCmd(repos []*git.Repository, entry remotePanelEntry) tea.Cmd {
-	filtered := make([]*git.Repository, 0, len(repos))
-	for _, repo := range repos {
-		if repo != nil {
-			filtered = append(filtered, repo)
-		}
-	}
+	filtered := filterRepositories(repos)
 	if len(filtered) == 0 || entry.RemoteName == "" || entry.BranchName == "" {
 		return nil
 	}
@@ -942,11 +903,8 @@ func (m *Model) deleteRemoteBranchMultiCmd(repos []*git.Repository, entry remote
 				return errMsg{err: fmt.Errorf("delete remote branch %s/%s in %s: %w", entry.RemoteName, entry.BranchName, repo.Name, err)}
 			}
 			repo.State.Message = fmt.Sprintf("deleted %s/%s", entry.RemoteName, entry.BranchName)
-			if err := repo.ForceRefresh(); err != nil {
+			if err := refreshBranchState(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
-			}
-			if repo.State != nil && repo.State.Branch != nil {
-				_ = repo.State.Branch.InitializeCommits(repo)
 			}
 		}
 		return repoActionResultMsg{panel: RemotePanel}
@@ -965,11 +923,8 @@ func (m *Model) checkoutCommitCmd(repo *git.Repository, commit *git.Commit) tea.
 			return errMsg{err: fmt.Errorf("checkout commit %s: %w", commit.Hash, err)}
 		}
 		repo.State.Message = fmt.Sprintf("checked out %s", shortHash(commit.Hash))
-		if err := repo.ForceRefresh(); err != nil {
+		if err := refreshBranchState(repo); err != nil {
 			return errMsg{err: err}
-		}
-		if repo.State != nil && repo.State.Branch != nil {
-			_ = repo.State.Branch.InitializeCommits(repo)
 		}
 		return repoActionResultMsg{panel: CommitPanel}
 	}
@@ -987,11 +942,8 @@ func (m *Model) resetToCommitCmd(repo *git.Repository, commit *git.Commit, reset
 			return errMsg{err: fmt.Errorf("reset --%s %s: %w", resetType, commit.Hash, err)}
 		}
 		repo.State.Message = fmt.Sprintf("reset --%s %s", resetType, shortHash(commit.Hash))
-		if err := repo.ForceRefresh(); err != nil {
+		if err := refreshBranchState(repo); err != nil {
 			return errMsg{err: err}
-		}
-		if repo.State != nil && repo.State.Branch != nil {
-			_ = repo.State.Branch.InitializeCommits(repo)
 		}
 		return repoActionResultMsg{panel: CommitPanel}
 	}

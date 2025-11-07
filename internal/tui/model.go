@@ -87,6 +87,7 @@ var (
 )
 
 var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}
+var tagWarningColor = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {

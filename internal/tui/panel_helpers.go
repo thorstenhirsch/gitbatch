@@ -1,7 +1,9 @@
 package tui
 
 import (
-	"sort"
+	"cmp"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/thorstenhirsch/gitbatch/internal/git"
@@ -37,34 +39,13 @@ func findBranchByName(repo *git.Repository, name string) *git.Branch {
 	return nil
 }
 
-func findRemoteBranch(repo *git.Repository, fullName string) (*git.Remote, *git.RemoteBranch) {
-	if repo == nil {
-		return nil, nil
-	}
-	for _, remote := range repo.Remotes {
-		if remote == nil {
-			continue
-		}
-		for _, branch := range remote.Branches {
-			if branch != nil && branch.Name == fullName {
-				return remote, branch
-			}
-		}
-	}
-	return nil, nil
-}
-
 func (m *Model) taggedRepositories() []*git.Repository {
-	tagged := make([]*git.Repository, 0)
-	for _, repo := range m.repositories {
+	return slices.DeleteFunc(slices.Clone(m.repositories), func(repo *git.Repository) bool {
 		if repo == nil {
-			continue
+			return true
 		}
-		if repo.WorkStatus() == git.Queued {
-			tagged = append(tagged, repo)
-		}
-	}
-	return tagged
+		return repo.WorkStatus() != git.Queued
+	})
 }
 
 func (m *Model) hasTaggedRepositories() bool {
@@ -165,11 +146,8 @@ func commonBranchNames(repos []*git.Repository) []string {
 			}
 		}
 	}
-	names := make([]string, 0, len(common))
-	for name := range common {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Collect(maps.Keys(common))
+	slices.Sort(names)
 	return names
 }
 
@@ -195,12 +173,7 @@ func remoteEntriesForRepo(repo *git.Repository) []remotePanelEntry {
 			})
 		}
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].RemoteName == entries[j].RemoteName {
-			return entries[i].BranchName < entries[j].BranchName
-		}
-		return entries[i].RemoteName < entries[j].RemoteName
-	})
+	slices.SortFunc(entries, compareRemoteEntries)
 	return entries
 }
 
@@ -242,15 +215,14 @@ func commonRemoteEntries(repos []*git.Repository) []remotePanelEntry {
 			}
 		}
 	}
-	result := make([]remotePanelEntry, 0, len(common))
-	for _, entry := range common {
-		result = append(result, entry)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].RemoteName == result[j].RemoteName {
-			return result[i].BranchName < result[j].BranchName
-		}
-		return result[i].RemoteName < result[j].RemoteName
-	})
+	result := slices.Collect(maps.Values(common))
+	slices.SortFunc(result, compareRemoteEntries)
 	return result
+}
+
+func compareRemoteEntries(a, b remotePanelEntry) int {
+	if diff := cmp.Compare(a.RemoteName, b.RemoteName); diff != 0 {
+		return diff
+	}
+	return cmp.Compare(a.BranchName, b.BranchName)
 }
