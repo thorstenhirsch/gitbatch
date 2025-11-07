@@ -69,6 +69,18 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 		return m, nil
 
+	case "esc":
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
+		if m.currentView == FocusView {
+			m.currentView = OverviewView
+			m.sidePanel = NonePanel
+			return m, nil
+		}
+		return m, nil
+
 	case "tab":
 		// TAB opens lazygit for the currently selected repository
 		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
@@ -116,26 +128,49 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 
-	case "home", "g":
+	case "g": // First g of gg - we need to check if it's followed by another g
+		// For now, just go to top (single g also works)
 		m.cursor = 0
 
-	case "end", "G":
+	case "G": // Shift+G goes to end
 		if len(m.repositories) > 0 {
 			m.cursor = len(m.repositories) - 1
 		}
 
-	case "pgup":
-		pageSize := m.height - 10
+	case "home":
+		m.cursor = 0
+
+	case "end":
+		if len(m.repositories) > 0 {
+			m.cursor = len(m.repositories) - 1
+		}
+
+	case "ctrl+f", "pgdown": // Ctrl+F and Page Down - scroll forward (down)
+		pageSize := m.height - 5
+		m.cursor += pageSize
+		if m.cursor >= len(m.repositories) {
+			m.cursor = len(m.repositories) - 1
+		}
+
+	case "ctrl+b", "pgup": // Ctrl+B and Page Up - scroll backward (up)
+		pageSize := m.height - 5
 		m.cursor -= pageSize
 		if m.cursor < 0 {
 			m.cursor = 0
 		}
 
-	case "pgdown":
-		pageSize := m.height - 10
-		m.cursor += pageSize
+	case "ctrl+d": // Ctrl+D - scroll down half page
+		halfPage := (m.height - 5) / 2
+		m.cursor += halfPage
 		if m.cursor >= len(m.repositories) {
 			m.cursor = len(m.repositories) - 1
+		}
+
+	case "ctrl+u": // Ctrl+U - scroll up half page
+		halfPage := (m.height - 5) / 2
+		m.cursor -= halfPage
+		if m.cursor < 0 {
+			m.cursor = 0
 		}
 
 	case " ", "space":

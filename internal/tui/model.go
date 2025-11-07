@@ -102,6 +102,7 @@ type Styles struct {
 	Panel          lipgloss.Style
 	PanelTitle     lipgloss.Style
 	Error          lipgloss.Style
+	TableBorder    lipgloss.Style
 }
 
 // DefaultStyles returns the default style set
@@ -129,8 +130,7 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
 		List: lipgloss.NewStyle().
 			Padding(1, 2),
-		ListItem: lipgloss.NewStyle().
-			PaddingLeft(2),
+		ListItem: lipgloss.NewStyle(),
 		SelectedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#1976D2", Dark: "#64B5F6"}).
 			Bold(true),
@@ -157,6 +157,8 @@ func DefaultStyles() *Styles {
 		Error: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}).
 			Bold(true),
+		TableBorder: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#9E9E9E", Dark: "#616161"}),
 	}
 }
 

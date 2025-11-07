@@ -2,17 +2,16 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
 const (
-	maxBranchLength     = 40
-	maxRepositoryLength = 30
-
 	queuedSymbol  = "●"
 	workingSymbol = "◉"
 	successSymbol = "✓"
@@ -25,7 +24,202 @@ const (
 
 	pushable = "↖"
 	pullable = "↘"
+
+	repoColPrefixWidth = 4 // cursor + space + status + space
 )
+
+type columnWidths struct {
+	repo      int
+	branch    int
+	commitMsg int
+}
+
+const (
+	maxRepoDisplayWidth   = 40
+	maxBranchDisplayWidth = 40
+	commitColumnMinWidth  = 10
+)
+
+func calculateColumnWidths(totalWidth int, repos []*git.Repository) columnWidths {
+	if totalWidth <= 0 {
+		return columnWidths{}
+	}
+
+	repoNameWidth := clampInt(maxRepoNameLength(repos), 0, maxRepoDisplayWidth) + 5
+	branchNameWidth := clampInt(maxBranchNameLength(repos), 0, maxBranchDisplayWidth) + 5
+
+	widths := columnWidths{
+		repo:      repoColPrefixWidth + repoNameWidth,
+		branch:    1 + branchNameWidth,
+		commitMsg: commitColumnMinWidth,
+	}
+
+	borders := 4 // │repo│branch│commit│
+	if totalWidth <= borders {
+		safeRepo := repoColPrefixWidth
+		if safeRepo > totalWidth {
+			safeRepo = totalWidth
+		}
+		if safeRepo < 0 {
+			safeRepo = 0
+		}
+		return columnWidths{repo: safeRepo, branch: 0, commitMsg: 0}
+	}
+
+	available := totalWidth - borders
+	if available < 0 {
+		available = 0
+	}
+
+	sum := widths.repo + widths.branch + widths.commitMsg
+	if sum > available {
+		deficit := sum - available
+		reduceWidth(&widths.commitMsg, &deficit, commitColumnMinWidth)
+		reduceWidth(&widths.branch, &deficit, 1)
+		reduceWidth(&widths.repo, &deficit, repoColPrefixWidth)
+		if deficit > 0 {
+			reduceWidth(&widths.commitMsg, &deficit, 1)
+		}
+		if deficit > 0 {
+			reduceWidth(&widths.branch, &deficit, 0)
+		}
+		if deficit > 0 {
+			reduceWidth(&widths.repo, &deficit, 0)
+		}
+	}
+
+	if widths.repo < 0 {
+		widths.repo = 0
+	}
+	if widths.branch < 0 {
+		widths.branch = 0
+	}
+	if widths.commitMsg < 0 {
+		widths.commitMsg = 0
+	}
+
+	used := widths.repo + widths.branch + widths.commitMsg
+	if used > available {
+		excess := used - available
+		reduceWidth(&widths.commitMsg, &excess, 0)
+		reduceWidth(&widths.branch, &excess, 0)
+		reduceWidth(&widths.repo, &excess, 0)
+		used = widths.repo + widths.branch + widths.commitMsg
+	}
+
+	remaining := available - used
+	if remaining > 0 {
+		widths.commitMsg += remaining
+	}
+
+	return widths
+}
+
+func maxRepoNameLength(repos []*git.Repository) int {
+	maxLen := 0
+	for _, r := range repos {
+		if r == nil {
+			continue
+		}
+		if length := lipgloss.Width(r.Name); length > maxLen {
+			maxLen = length
+		}
+	}
+	return maxLen
+}
+
+func maxBranchNameLength(repos []*git.Repository) int {
+	maxLen := 0
+	for _, r := range repos {
+		if r == nil || r.State == nil || r.State.Branch == nil {
+			continue
+		}
+		if length := lipgloss.Width(r.State.Branch.Name); length > maxLen {
+			maxLen = length
+		}
+	}
+	return maxLen
+}
+
+func branchContent(r *git.Repository) string {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return ""
+	}
+	return r.State.Branch.Name + syncSuffix(r.State.Branch)
+}
+
+func syncSuffix(branch *git.Branch) string {
+	if branch == nil || branch.Upstream == nil {
+		return ""
+	}
+	pushables, _ := strconv.Atoi(branch.Pushables)
+	pullables, _ := strconv.Atoi(branch.Pullables)
+	var parts []string
+	if pushables > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d", pushable, pushables))
+	}
+	if pullables > 0 {
+		parts = append(parts, fmt.Sprintf("%s%d", pullable, pullables))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " " + strings.Join(parts, " ")
+}
+
+func reduceWidth(current *int, deficit *int, min int) {
+	if deficit == nil || current == nil {
+		return
+	}
+	if *deficit <= 0 {
+		return
+	}
+	if min < 0 {
+		min = 0
+	}
+	reducible := *current - min
+	if reducible <= 0 {
+		return
+	}
+	delta := reducible
+	if delta > *deficit {
+		delta = *deficit
+	}
+	*current -= delta
+	*deficit -= delta
+}
+
+func clampInt(value, min, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+// renderTableBorder renders a horizontal border for the table
+// Example: "┌────────────┬────────────┬────────────┐"
+func (m *Model) renderTableBorder(colWidths columnWidths, borderType string) string {
+	var left, mid, right, horiz string
+	switch borderType {
+	case "top":
+		left, mid, right, horiz = "┌", "┬", "┐", "─"
+	case "bottom":
+		left, mid, right, horiz = "└", "┴", "┘", "─"
+	default:
+		left, mid, right, horiz = "├", "┼", "┤", "─"
+	}
+
+	border := left +
+		strings.Repeat(horiz, colWidths.repo) + mid +
+		strings.Repeat(horiz, colWidths.branch) + mid +
+		strings.Repeat(horiz, colWidths.commitMsg) +
+		right
+
+	return m.styles.TableBorder.Render(border)
+}
 
 // View renders the UI
 func (m *Model) View() string {
@@ -45,12 +239,21 @@ func (m *Model) View() string {
 		content = m.renderFocus()
 	}
 
-	// Combine with status bar and help
+	// Status bar is always at the bottom
 	statusBar := m.renderStatusBar()
 
 	if m.showHelp {
 		help := m.renderHelp()
 		content = lipgloss.JoinVertical(lipgloss.Left, content, help)
+	}
+
+	// Fill remaining space and ensure status bar is at bottom
+	contentHeight := lipgloss.Height(content)
+	statusBarHeight := 1
+	remainingHeight := m.height - contentHeight - statusBarHeight
+
+	if remainingHeight > 0 {
+		content += strings.Repeat("\n", remainingHeight)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, content, statusBar)
@@ -65,20 +268,9 @@ func (m *Model) renderOverview() string {
 		return m.styles.List.Render("No repositories found")
 	}
 
-	// Calculate the longest repository name (capped at maxRepositoryLength)
-	maxNameWidth := 0
-	for _, r := range m.repositories {
-		nameLen := len(r.Name)
-		if nameLen > maxRepositoryLength {
-			nameLen = maxRepositoryLength
-		}
-		if nameLen > maxNameWidth {
-			maxNameWidth = nameLen
-		}
-	}
-
 	// Calculate visible range based on terminal height
-	visibleHeight := m.height - 5 // Reserve space for status bar
+	// Reserve space for: title (1) + top border (1) + bottom border (1) + status bar (1)
+	visibleHeight := m.height - 4
 	startIdx := 0
 	endIdx := len(m.repositories)
 
@@ -98,37 +290,58 @@ func (m *Model) renderOverview() string {
 		}
 	}
 
+	// Compute column widths based on content and available width
+	colWidths := calculateColumnWidths(m.width, m.repositories)
+
 	// Render title - stretch across full width
 	titleText := fmt.Sprintf(" Matched Repositories (%d) ", len(m.repositories))
 	title := m.styles.Title.Width(m.width).Render(titleText)
+
+	// Top border for table
+	topBorder := m.renderTableBorder(colWidths, "top")
 
 	// Render repositories
 	var lines []string
 	for i := startIdx; i < endIdx; i++ {
 		r := m.repositories[i]
-		line := m.renderRepositoryLine(r, i == m.cursor, maxNameWidth)
+		line := m.renderRepositoryLine(r, i == m.cursor, colWidths)
 		lines = append(lines, line)
 	}
 
 	// Add scroll indicators
 	if startIdx > 0 {
-		lines = append([]string{m.styles.Help.Render("  ↑ more above")}, lines...)
+		scrollUp := m.styles.Help.Render("  ↑ more above")
+		lines = append([]string{scrollUp}, lines...)
 	}
 	if endIdx < len(m.repositories) {
-		lines = append(lines, m.styles.Help.Render("  ↓ more below"))
+		scrollDown := m.styles.Help.Render("  ↓ more below")
+		lines = append(lines, scrollDown)
 	}
 
-	// Add empty row after the list
-	lines = append(lines, "")
+	// Fill remaining rows with empty table rows to stretch to full height
+	currentRowCount := len(lines)
+	for currentRowCount < visibleHeight {
+		border := m.styles.TableBorder.Render("│")
+		emptyRepoCol := strings.Repeat(" ", colWidths.repo)
+		emptyBranchCol := strings.Repeat(" ", colWidths.branch)
+		emptyCommitCol := strings.Repeat(" ", colWidths.commitMsg)
+		emptyRow := border + emptyRepoCol + border + emptyBranchCol + border + emptyCommitCol + border
+		lines = append(lines, emptyRow)
+		currentRowCount++
+	}
+
+	// Bottom border for table
+	bottomBorder := m.renderTableBorder(colWidths, "bottom")
 
 	list := strings.Join(lines, "\n")
 
-	return lipgloss.JoinVertical(lipgloss.Left, title, "", list)
+	return lipgloss.JoinVertical(lipgloss.Left, title, topBorder, list, bottomBorder)
 }
 
-// renderRepositoryLine renders a single repository line
-func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, maxNameWidth int) string {
-	// Status indicator
+// renderRepositoryLine renders a single repository line as a table row
+// Table format: │cursor status repo-name    │ branch-name │ commit tags/message │
+// Example:      │→ ●   example-repo         │  main       │ [v1.0.0] add feature │
+func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths columnWidths) string {
 	statusIcon := " "
 	style := m.styles.ListItem
 
@@ -147,59 +360,143 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, maxNameWi
 		style = m.styles.FailedItem
 	}
 
-	// Repository name (truncate if too long)
-	name := r.Name
-	if len(name) > maxRepositoryLength {
-		name = name[:maxRepositoryLength-3] + "..."
+	cursor := " "
+	if selected {
+		cursor = "→"
 	}
 
-	// Pad the name to align branch names - add 3 spaces after the longest name
-	nameWidth := len(name)
-	padding := maxNameWidth - nameWidth + 3
+	repoNameWidth := colWidths.repo - repoColPrefixWidth
+	if repoNameWidth < 0 {
+		repoNameWidth = 0
+	}
+	repoName := truncateString(r.Name, repoNameWidth)
+	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
 
-	// Branch info
-	branchName := r.State.Branch.Name
-	if len(branchName) > maxBranchLength {
-		branchName = branchName[:maxBranchLength-3] + "..."
+	branchContentWidth := colWidths.branch - 1
+	if branchContentWidth < 0 {
+		branchContentWidth = 0
+	}
+	branchContent := truncateString(branchContent(r), branchContentWidth)
+	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
+
+	commitMsg, commitHash := commitSummary(r)
+	tags := collectTags(r, commitHash)
+	var tagsText string
+	if len(tags) > 0 {
+		tagsText = "[" + strings.Join(tags, ", ") + "]"
+	}
+	commitParts := make([]string, 0, 2)
+	if tagsText != "" {
+		commitParts = append(commitParts, tagsText)
+	}
+	if commitMsg != "" {
+		commitParts = append(commitParts, commitMsg)
+	}
+	commitContent := strings.Join(commitParts, " ")
+	commitContentWidth := colWidths.commitMsg - 1
+	if commitContentWidth < 0 {
+		commitContentWidth = 0
+	}
+	commitContent = truncateString(commitContent, commitContentWidth)
+	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
+
+	var styledRepoCol, styledBranchCol, styledCommitCol string
+	if selected {
+		styledRepoCol = m.styles.SelectedItem.Render(repoColumn)
+		styledBranchCol = m.styles.SelectedItem.Render(branchColumn)
+		styledCommitCol = m.styles.SelectedItem.Render(commitColumn)
+	} else {
+		styledRepoCol = style.Render(repoColumn)
+		styledBranchCol = style.Render(branchColumn)
+		styledCommitCol = style.Render(commitColumn)
 	}
 
-	branchInfo := m.styles.BranchInfo.Render(branchName)
+	border := m.styles.TableBorder.Render("│")
+	return border + styledRepoCol + border + styledBranchCol + border + styledCommitCol + border
+}
 
-	// Push/pull indicators
-	var syncInfo string
-	if r.State.Branch.Upstream != nil {
-		pushables, _ := strconv.Atoi(r.State.Branch.Pushables)
-		pullables, _ := strconv.Atoi(r.State.Branch.Pullables)
+func commitSummary(r *git.Repository) (string, plumbing.Hash) {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return "", plumbing.Hash{}
+	}
 
-		if pushables > 0 {
-			syncInfo += lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFF00")).Render(fmt.Sprintf("%s%d", pushable, pushables))
+	branch := r.State.Branch
+	if branch.State != nil && branch.State.Commit != nil {
+		commitState := branch.State.Commit
+		message := commitState.Message
+		if commitState.C != nil {
+			return firstLine(commitState.C.Message), commitState.C.Hash
 		}
-		if pullables > 0 {
-			if syncInfo != "" {
-				syncInfo += " "
+		if commitState.Hash != "" {
+			return firstLine(message), plumbing.NewHash(commitState.Hash)
+		}
+		return firstLine(message), plumbing.Hash{}
+	}
+
+	if branch.Reference != nil {
+		if commitObj, err := r.Repo.CommitObject(branch.Reference.Hash()); err == nil {
+			return firstLine(commitObj.Message), commitObj.Hash
+		}
+	}
+
+	return "", plumbing.Hash{}
+}
+
+func collectTags(r *git.Repository, commitHash plumbing.Hash) []string {
+	if r == nil || commitHash.IsZero() {
+		return nil
+	}
+
+	iter, err := r.Repo.Tags()
+	if err != nil {
+		return nil
+	}
+	defer iter.Close()
+
+	var tags []string
+	_ = iter.ForEach(func(ref *plumbing.Reference) error {
+		if ref == nil {
+			return nil
+		}
+		if ref.Type() != plumbing.HashReference {
+			return nil
+		}
+		hash := ref.Hash()
+		if tagObj, err := r.Repo.TagObject(hash); err == nil {
+			if tagObj.Target == commitHash {
+				tags = append(tags, tagObj.Name)
 			}
-			syncInfo += lipgloss.NewStyle().Foreground(lipgloss.Color("#00FFFF")).Render(fmt.Sprintf("%s%d", pullable, pullables))
+			return nil
 		}
+		if hash == commitHash {
+			tags = append(tags, ref.Name().Short())
+		}
+		return nil
+	})
+
+	if len(tags) > 1 {
+		sort.Strings(tags)
 	}
 
-	// Build the line with aligned branch names
-	prefix := "  " // 2 spaces for indent
-	if selected {
-		prefix = "→ " // arrow + space for selected item
-	}
+	return tags
+}
 
-	line := prefix + statusIcon + " " + name + strings.Repeat(" ", padding)
-	if branchName != "" {
-		line += branchInfo
+func firstLine(message string) string {
+	if idx := strings.IndexByte(message, '\n'); idx >= 0 {
+		message = message[:idx]
 	}
-	if syncInfo != "" {
-		line += "  " + syncInfo
-	}
+	return strings.TrimSpace(message)
+}
 
-	if selected {
-		return m.styles.SelectedItem.Render(line)
+// truncateString truncates a string to the specified length, adding "..." if needed
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
 	}
-	return style.Render(line)
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // renderFocus renders the focus view with side panel
@@ -456,14 +753,16 @@ func (m *Model) renderStatusBar() string {
 // renderHelp renders the help screen
 func (m *Model) renderHelp() string {
 	help := `
-Navigation:  ↑/k up  ↓/j down  Home/g top  End/G bottom  PgUp/PgDown page
+Navigation:  ↑/k up   g/Home top        ↓/j down G/End bottom
+             PgUp/Ctrl+B page up        PgDn/Ctrl+F page down
+             Ctrl+U half page up        Ctrl+D half page down
 
 Actions:     Space   toggle queue       Enter   start queue
              a       queue all          A       unqueue all
              m       cycle mode         Tab     open lazygit
 
 Views:       b  branches    c  commits    r  remotes
-             s  status      S  stash
+             s  status      S  stash      ESC back (from views)
 
 Sorting:     n  by name     t  by time
 
