@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/thorstenhirsch/gitbatch/internal/command"
-	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -16,13 +15,6 @@ type Job struct {
 	Repository *git.Repository
 	// Options is a placeholder for operation options
 	Options interface{}
-}
-
-func markRepoDirty(repo *git.Repository) {
-	if repo == nil || repo.State == nil || repo.State.Branch == nil {
-		return
-	}
-	repo.State.Branch.Clean = false
 }
 
 // Type is the a git operation supported
@@ -80,15 +72,19 @@ func (j *Job) start() error {
 			}
 		}
 		if err := command.Fetch(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
-			return err
+			return j.Repository.ApplyOperationError(err)
 		}
-		j.Repository.SetWorkStatus(git.Available)
-		j.Repository.State.Message = ""
+		if j.Repository.State != nil && j.Repository.State.RecoverableError {
+			// Preserve recoverable failure state surfaced during fetch.
+			if j.Repository.WorkStatus() != git.Fail {
+				j.Repository.SetWorkStatus(git.Fail)
+			}
+		} else {
+			j.Repository.SetWorkStatus(git.Available)
+			if j.Repository.State != nil {
+				j.Repository.State.Message = ""
+			}
+		}
 	case PullJob:
 		j.Repository.State.Message = "pulling.."
 		var (
@@ -113,29 +109,16 @@ func (j *Job) start() error {
 			opts = &command.PullOptions{}
 		}
 		if j.Repository.State.Branch.Upstream == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "upstream not set"
-			}
-			markRepoDirty(j.Repository)
+			j.Repository.MarkRecoverableError("upstream not set")
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "remote not set"
-			}
-			markRepoDirty(j.Repository)
+			j.Repository.MarkCriticalError("remote not set")
 			return nil
 		}
 		opts = ensurePullOptions(opts, j.Repository, true, false)
 		if err := command.Pull(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
-			return err
+			return j.Repository.ApplyOperationError(err)
 		}
 		if suppress {
 			j.Repository.SetWorkStatus(git.Available)
@@ -146,41 +129,24 @@ func (j *Job) start() error {
 	case MergeJob:
 		j.Repository.State.Message = "merging.."
 		if j.Repository.State.Branch.Upstream == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "upstream not set"
-			}
-			markRepoDirty(j.Repository)
+			j.Repository.MarkRecoverableError("upstream not set")
 			return nil
 		}
 		if err := command.Merge(j.Repository, &command.MergeOptions{
 			BranchName: j.Repository.State.Branch.Upstream.Name,
 		}); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
-			return err
+			return j.Repository.ApplyOperationError(err)
 		}
 		j.Repository.SetWorkStatus(git.Success)
 		j.Repository.State.Message = "merge completed"
 	case RebaseJob:
 		j.Repository.State.Message = "rebasing.."
 		if j.Repository.State.Branch.Upstream == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "upstream not set"
-			}
-			markRepoDirty(j.Repository)
+			j.Repository.MarkRecoverableError("upstream not set")
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "remote not set"
-			}
-			markRepoDirty(j.Repository)
+			j.Repository.MarkCriticalError("remote not set")
 			return nil
 		}
 		var opts *command.PullOptions
@@ -191,31 +157,18 @@ func (j *Job) start() error {
 		}
 		opts = ensurePullOptions(opts, j.Repository, false, true)
 		if err := command.Pull(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
-			return err
+			return j.Repository.ApplyOperationError(err)
 		}
 		j.Repository.SetWorkStatus(git.Success)
 		j.Repository.State.Message = "rebase completed"
 	case PushJob:
 		j.Repository.State.Message = "pushing.."
 		if j.Repository.State.Remote == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "remote not set"
-			}
-			markRepoDirty(j.Repository)
+			j.Repository.MarkCriticalError("remote not set")
 			return nil
 		}
 		if j.Repository.State.Branch == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "branch not set"
-			}
-			markRepoDirty(j.Repository)
+			j.Repository.MarkCriticalError("branch not set")
 			return nil
 		}
 		var (
@@ -241,12 +194,7 @@ func (j *Job) start() error {
 		}
 		opts = ensurePushOptions(opts, j.Repository)
 		if err := command.Push(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
-			return err
+			return j.Repository.ApplyOperationError(err)
 		}
 		if suppress {
 			j.Repository.SetWorkStatus(git.Available)
@@ -326,22 +274,4 @@ func branchNameForPull(repo *git.Repository) string {
 		}
 	}
 	return repo.State.Branch.Name
-}
-
-func cleanErrorMessage(msg string) string {
-	msg = strings.ReplaceAll(msg, "\r", " ")
-	msg = strings.ReplaceAll(msg, "\n", " ")
-	msg = strings.TrimSpace(msg)
-	msg = strings.TrimPrefix(msg, gerr.ErrUnclassified.Error()+": ")
-	if msg == gerr.ErrUnclassified.Error() {
-		msg = ""
-	}
-	if msg == "" {
-		return "unknown error"
-	}
-	fields := strings.Fields(msg)
-	if len(fields) == 0 {
-		return "unknown error"
-	}
-	return strings.Join(fields, " ")
 }

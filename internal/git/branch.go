@@ -347,8 +347,13 @@ func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {
 	}
 
 	mergeRef := strings.TrimSpace(string(cm))
-	if mergeRef == "" || !strings.Contains(mergeRef, branchName) {
+	if mergeRef == "" {
 		return nil, fmt.Errorf("invalid merge branch configuration")
+	}
+
+	mergeBranchName := normalizeMergeBranchName(remoteName, branchName, mergeRef)
+	if mergeBranchName == "" {
+		return nil, fmt.Errorf("could not determine merge branch name")
 	}
 
 	// Find the remote by name
@@ -366,12 +371,38 @@ func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {
 	}
 
 	// Find the remote branch
-	targetBranchName := targetRemote.Name + "/" + branchName
+	targetBranchName := targetRemote.Name + "/" + mergeBranchName
 	for _, rb := range targetRemote.Branches {
 		if rb.Name == targetBranchName {
 			return rb, nil
 		}
 	}
 
-	return nil, fmt.Errorf("upstream branch %s not found", targetBranchName)
+	// Remote branch is configured but not present locally; return placeholder so
+	// downstream checks can verify the remote state via git ls-remote.
+	return &RemoteBranch{Name: targetBranchName}, nil
+}
+
+func normalizeMergeBranchName(remoteName, branchName, mergeRef string) string {
+	merged := strings.TrimSpace(mergeRef)
+	if merged == "" {
+		return ""
+	}
+
+	// Remove common ref prefixes
+	merged = strings.TrimPrefix(merged, "refs/heads/")
+	merged = strings.TrimPrefix(merged, "refs/remotes/")
+	merged = strings.TrimPrefix(merged, "heads/")
+	merged = strings.TrimPrefix(merged, "remotes/")
+
+	if remoteName != "" {
+		merged = strings.TrimPrefix(merged, remoteName+"/")
+	}
+
+	merged = strings.TrimPrefix(merged, "/")
+	if merged == "" {
+		return strings.TrimSpace(branchName)
+	}
+
+	return merged
 }

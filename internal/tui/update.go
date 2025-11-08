@@ -42,7 +42,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case lazygitClosedMsg:
-		// Lazygit has closed, just refresh the display
+		repo := msg.repo
+		if repo != nil {
+			repo.SetWorkStatus(git.Working)
+			if m.updateJobsRunningFlag() {
+				return m, tea.Batch(refreshRepoStateCmd(repo), tickCmd())
+			}
+			return m, refreshRepoStateCmd(repo)
+		}
+		if m.updateJobsRunningFlag() {
+			return m, tickCmd()
+		}
 		return m, nil
 
 	case jobCompletedMsg:
@@ -77,6 +87,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Auto-fetch failures are recorded on the affected repositories and should
 		// not pollute the global status bar. Leave m.err untouched so the user only
 		// sees errors when focusing the specific repo.
+		return m, nil
+
+	case repoRefreshResultMsg:
+		repo := msg.repo
+		if repo != nil {
+			if msg.err != nil {
+				repo.MarkCriticalError(msg.err.Error())
+			} else if repo.State != nil && repo.State.RecoverableError {
+				repo.SetWorkStatus(git.Fail)
+			} else {
+				repo.SetWorkStatus(git.Available)
+				if repo.State != nil {
+					repo.State.Message = ""
+				}
+			}
+		}
+		if m.updateJobsRunningFlag() {
+			return m, tickCmd()
+		}
 		return m, nil
 	}
 
@@ -135,16 +164,17 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
 			r := m.repositories[m.cursor]
 			if isLazygitAvailable() {
-				return m, tea.ExecProcess(exec.Command("lazygit", "-p", r.AbsPath), func(err error) tea.Msg {
+				r.SetWorkStatus(git.Working)
+				cmd := tea.ExecProcess(exec.Command("lazygit", "-p", r.AbsPath), func(err error) tea.Msg {
 					if err != nil {
 						return errMsg{err: err}
 					}
-					// Refresh repository state after lazygit exits
-					if refreshErr := r.ForceRefresh(); refreshErr != nil {
-						// Continue even if refresh fails
-					}
-					return lazygitClosedMsg{}
+					return lazygitClosedMsg{repo: r}
 				})
+				if m.updateJobsRunningFlag() {
+					return m, tea.Batch(cmd, tickCmd())
+				}
+				return m, cmd
 			}
 		}
 		return m, nil
@@ -695,11 +725,34 @@ func repoIsDirty(repo *git.Repository) bool {
 	if repo.State == nil || repo.State.Branch == nil {
 		return false
 	}
-	branch := repo.State.Branch
-	if branch.Clean {
+	return !repo.State.Branch.Clean
+}
+
+func repoIsNavigable(repo *git.Repository) bool {
+	if repo == nil {
 		return false
 	}
-	return branch.HasIncomingCommits()
+	state := repo.State
+	if state != nil && state.RecoverableError {
+		return true
+	}
+	if state == nil {
+		return false
+	}
+	status := repo.WorkStatus()
+	if status == git.Fail {
+		return false
+	}
+	if status == git.Queued {
+		return true
+	}
+	if status.Ready {
+		return true
+	}
+	if repoIsDirty(repo) {
+		return true
+	}
+	return false
 }
 
 func repoIsActionable(repo *git.Repository) bool {
@@ -1169,11 +1222,8 @@ func (m *Model) findNextReadyIndex(start int, direction int) int {
 			index = 0
 		}
 		repo := m.repositories[index]
-		if repo != nil {
-			status := repo.WorkStatus()
-			if status == git.Queued || status.Ready || repoIsDirty(repo) {
-				return index
-			}
+		if repoIsNavigable(repo) {
+			return index
 		}
 		index += direction
 	}

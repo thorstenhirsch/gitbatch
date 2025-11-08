@@ -35,10 +35,11 @@ type Repository struct {
 
 // RepositoryState is the current pointers of a repository
 type RepositoryState struct {
-	workStatus WorkStatus
-	Branch     *Branch
-	Remote     *Remote
-	Message    string
+	workStatus       WorkStatus
+	Branch           *Branch
+	Remote           *Remote
+	Message          string
+	RecoverableError bool
 }
 
 // RepositoryListener is a type for listeners
@@ -101,8 +102,9 @@ func FastInitializeRepo(dir string) (r *Repository, err error) {
 		ModTime: fstat.ModTime(),
 		Repo:    *rp,
 		State: &RepositoryState{
-			workStatus: Available,
-			Message:    "",
+			workStatus:       Available,
+			Message:          "",
+			RecoverableError: false,
 		},
 		mutex:     &sync.RWMutex{},
 		listeners: make(map[string][]RepositoryListener),
@@ -244,9 +246,21 @@ func (r *Repository) WorkStatus() WorkStatus {
 
 // SetWorkStatus sets the state of repository and sends repository updated event
 func (r *Repository) SetWorkStatus(ws WorkStatus) {
+	if r.State == nil {
+		return
+	}
 	r.State.workStatus = ws
+	if ws != Fail {
+		r.State.RecoverableError = false
+	}
 	// we could send an event data but we don't need for this topic
 	_ = r.Publish(RepositoryUpdated, nil)
+}
+
+// MarkFailure is preserved for backward compatibility. Prefer using
+// MarkCriticalError or MarkRecoverableError for clarity.
+func (r *Repository) MarkFailure(message string, recoverable bool) {
+	r.markErrorState(message, recoverable)
 }
 
 func (r *Repository) String() string {

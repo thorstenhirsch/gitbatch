@@ -121,7 +121,7 @@ func fetchWithGit(r *git.Repository, options *FetchOptions) (err error) {
 	if err := r.Refresh(); err != nil {
 		return err
 	}
-	ensureCleanAfterFetch(r)
+	ReevaluateRepositoryState(r)
 	return nil
 }
 
@@ -164,6 +164,7 @@ func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (e
 		if err == gogit.NoErrAlreadyUpToDate {
 			// Already up-to-date - no need to refresh
 			r.SetWorkStatus(git.Success)
+			ReevaluateRepositoryState(r)
 			r.State.Message = initialRef + ".." + initialRef + " already up-to-date"
 			return nil
 		} else if strings.Contains(err.Error(), "couldn't find remote ref") {
@@ -192,12 +193,18 @@ func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (e
 		return err
 	}
 
-	ensureCleanAfterFetch(r)
+	ReevaluateRepositoryState(r)
 
 	// Get updated refs after refresh
 	uRef := "origin/HEAD"
 	if r.State.Branch != nil && r.State.Branch.Upstream != nil {
-		uRef = r.State.Branch.Upstream.Reference.Hash().String()[:7]
+		up := r.State.Branch.Upstream
+		switch {
+		case up.Reference != nil:
+			uRef = up.Reference.Hash().String()[:7]
+		case up.Name != "":
+			uRef = up.Name
+		}
 	}
 
 	msg, err := getFetchMessage(r, initialRef, uRef)
@@ -227,69 +234,4 @@ func getFetchMessage(r *git.Repository, ref1, ref2 string) (string, error) {
 		}
 	}
 	return msg, nil
-}
-
-func ensureCleanAfterFetch(r *git.Repository) {
-	if r == nil || r.State == nil || r.State.Branch == nil {
-		return
-	}
-
-	branch := r.State.Branch
-	markClean := func() {
-		branch.Clean = true
-		for _, candidate := range r.Branches {
-			if candidate != nil && candidate.Name == branch.Name {
-				candidate.Clean = true
-			}
-		}
-	}
-	if branch.Clean {
-		return
-	}
-
-	if !branch.HasIncomingCommits() {
-		markClean()
-		return
-	}
-
-	upstream := branch.Upstream
-	if upstream == nil || upstream.Name == "" {
-		return
-	}
-
-	if fastForwardDryRunSucceeds(r, upstream) {
-		markClean()
-	}
-}
-
-func fastForwardDryRunSucceeds(r *git.Repository, upstream *git.RemoteBranch) bool {
-	if r == nil || upstream == nil || upstream.Reference == nil {
-		return false
-	}
-
-	headRef, err := r.Repo.Head()
-	if err != nil {
-		return false
-	}
-	headCommit, err := r.Repo.CommitObject(headRef.Hash())
-	if err != nil {
-		return false
-	}
-	upstreamCommit, err := r.Repo.CommitObject(upstream.Reference.Hash())
-	if err != nil {
-		return false
-	}
-
-	if headCommit.Hash == upstreamCommit.Hash {
-		return true
-	}
-
-	mergeBase, err := headCommit.MergeBase(upstreamCommit)
-	if err != nil {
-		return false
-	}
-	if len(mergeBase) == 0 {
-		return false
-	}
-	return mergeBase[0].Hash == headCommit.Hash
 }

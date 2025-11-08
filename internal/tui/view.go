@@ -544,6 +544,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	status := r.WorkStatus()
 	dirty := repoIsDirty(r)
 	failed := status == git.Fail
+	recoverable := failed && r.State != nil && r.State.RecoverableError
 
 	switch status {
 	case git.Pending:
@@ -563,11 +564,15 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		style = m.styles.SuccessItem
 	case git.Fail:
 		statusIcon = failSymbol
-		style = m.styles.FailedItem
+		if recoverable {
+			style = m.styles.RecoverableFailedItem
+		} else {
+			style = m.styles.FailedItem
+		}
 	}
 	if dirty && !failed {
 		statusIcon = dirtySymbol
-		style = m.styles.DisabledItem
+		style = m.styles.DirtyItem
 	}
 
 	cursor := " "
@@ -582,7 +587,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	repoName := truncateString(r.Name, repoNameWidth)
 	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
 	if dirty && !failed && !selected {
-		repoColumn = m.styles.DisabledItem.Render(repoColumn)
+		repoColumn = m.styles.DirtyItem.Render(repoColumn)
 	}
 
 	branchContentWidth := colWidths.branch - 1
@@ -592,7 +597,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	branchContent := truncateString(branchContent(r), branchContentWidth)
 	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
 	if dirty && !failed && !selected {
-		branchColumn = m.styles.DisabledItem.Render(branchColumn)
+		branchColumn = m.styles.DirtyItem.Render(branchColumn)
 	}
 
 	commitContentWidth := colWidths.commitMsg - 1
@@ -613,13 +618,15 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	commitContent := visibleCommitContent(fullCommitContent, offset, commitContentWidth)
 	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
 	if dirty && !failed && !selected {
-		commitColumn = m.styles.DisabledItem.Render(commitColumn)
+		commitColumn = m.styles.DirtyItem.Render(commitColumn)
 	}
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
 	if selected {
 		var highlight lipgloss.Style
 		switch {
+		case recoverable:
+			highlight = m.styles.RecoverableFailedSelectedItem
 		case failed:
 			highlight = m.styles.FailedSelectedItem
 		case dirty:
@@ -1383,6 +1390,7 @@ func (m *Model) renderStatusBar() string {
 	focusRepo := m.currentRepository()
 	dirty := repoIsDirty(focusRepo)
 	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
+	recoverable := failed && focusRepo.State != nil && focusRepo.State.RecoverableError
 
 	center := ""
 
@@ -1427,18 +1435,30 @@ func (m *Model) renderStatusBar() string {
 		center = truncateString(fmt.Sprintf("%s: %s", label, display), maxCenter)
 	} else {
 		if failed {
-			statusBarStyle = m.styles.StatusBarError
-			left = " repo failed"
-			right = "c: clear"
-			rightWidth = lipgloss.Width(right)
-			maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
-			if maxCenter < 0 {
-				maxCenter = 0
-			}
+			message := "Operation failed"
 			if focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != "" {
-				center = truncateString(singleLineMessage(focusRepo.State.Message), maxCenter)
+				message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
+			}
+			if recoverable {
+				statusBarStyle = m.styles.StatusBarRecoverable
+				left = " repo needs attention"
+				right = "c: clear | TAB: lazygit"
+				rightWidth = lipgloss.Width(right)
+				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+				if maxCenter < 0 {
+					maxCenter = 0
+				}
+				center = truncateString(message, maxCenter)
 			} else {
-				center = "Operation failed"
+				statusBarStyle = m.styles.StatusBarError
+				left = " repo failed"
+				right = "c: clear"
+				rightWidth = lipgloss.Width(right)
+				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+				if maxCenter < 0 {
+					maxCenter = 0
+				}
+				center = truncateString(message, maxCenter)
 			}
 		} else if dirty {
 			statusBarStyle = m.styles.StatusBarDirty

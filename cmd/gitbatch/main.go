@@ -12,7 +12,7 @@ import (
 var version = "dev"
 
 func main() {
-	kingpin.Version("gitbatch version " + version)
+	kingpin.Version("gitbatch " + version)
 	tui.Version = version
 
 	dirs := kingpin.Flag("directory", "Directory(s) to roam for git repositories.").Short('d').Strings()

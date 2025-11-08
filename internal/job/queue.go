@@ -15,7 +15,7 @@ type Queue struct {
 	series []*Job
 }
 
-const maxConcurrentJobs = 5
+const maxConcurrentJobs = 10
 
 // CreateJobQueue creates a jobqueue struct and initialize its slice then return
 // its pointer
@@ -100,9 +100,6 @@ func (jq *Queue) StartJobsAsync() map[*Job]error {
 	)
 	if maxWorkers > maxConcurrentJobs {
 		maxWorkers = maxConcurrentJobs
-	}
-	if maxWorkers < 1 {
-		maxWorkers = 1
 	}
 
 	var (

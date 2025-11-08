@@ -1,6 +1,7 @@
 package errors
 
 import (
+	stdErrors "errors"
 	"fmt"
 	"strings"
 )
@@ -92,4 +93,24 @@ func ParseGitError(out string, err error) error {
 	}
 
 	return fmt.Errorf("%s", trimmed)
+}
+
+// IsRecoverable reports whether the provided git error represents a recoverable state.
+func IsRecoverable(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case stdErrors.Is(err, ErrRemoteBranchNotSpecified):
+		return true
+	case stdErrors.Is(err, ErrCouldNotFindRemoteRef):
+		return true
+	case stdErrors.Is(err, ErrReferenceBroken):
+		return true
+	}
+	lowered := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lowered == "" {
+		return false
+	}
+	return strings.Contains(lowered, "upstream is gone")
 }

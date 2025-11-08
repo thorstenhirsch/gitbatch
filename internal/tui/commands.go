@@ -6,6 +6,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/thorstenhirsch/gitbatch/internal/command"
+	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/load"
 )
 
@@ -38,4 +40,17 @@ func tickCmd() tea.Cmd {
 func isLazygitAvailable() bool {
 	_, err := exec.LookPath("lazygit")
 	return err == nil
+}
+
+func refreshRepoStateCmd(repo *git.Repository) tea.Cmd {
+	return func() tea.Msg {
+		if repo == nil {
+			return repoRefreshResultMsg{}
+		}
+		if err := repo.ForceRefresh(); err != nil {
+			return repoRefreshResultMsg{repo: repo, err: err}
+		}
+		command.ReevaluateRepositoryState(repo)
+		return repoRefreshResultMsg{repo: repo}
+	}
 }
