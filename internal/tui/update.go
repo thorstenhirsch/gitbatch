@@ -23,7 +23,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
-		return m, nil
+		return m, m.maybeStartInitialFetch(nil)
 
 	case repositoriesLoadedMsg:
 		repos := make([]*git.Repository, 0, len(msg.repos))
@@ -36,7 +36,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.loading = false
 
-		if cmd := m.startFetchForRepos(repos); cmd != nil {
+		if cmd := m.maybeStartInitialFetch(repos); cmd != nil {
 			return m, cmd
 		}
 		return m, nil
@@ -74,9 +74,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case autoFetchFailedMsg:
 		m.jobsRunning = false
-		if len(msg.names) > 0 {
-			m.err = fmt.Errorf("auto fetch failed for: %s", strings.Join(msg.names, ", "))
-		}
+		// Auto-fetch failures are recorded on the affected repositories and should
+		// not pollute the global status bar. Leave m.err untouched so the user only
+		// sees errors when focusing the specific repo.
 		return m, nil
 	}
 
@@ -177,7 +177,6 @@ func (m *Model) handleCredentialPromptKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		cmd := m.submitCredentialInput()
 		return true, cmd
 	case "tab", "shift+tab":
-		m.toggleCredentialField()
 		return true, nil
 	case "backspace", "ctrl+h":
 		m.backspaceCredentialInput()
@@ -591,7 +590,6 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			repo := m.repositories[m.cursor]
 			if repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail && repo.State.Message != "" {
 				repo.State.Message = ""
-				repo.SetWorkStatus(git.Available)
 				return m, nil
 			}
 		}
@@ -704,7 +702,14 @@ func repoIsActionable(repo *git.Repository) bool {
 	if repo == nil {
 		return false
 	}
-	if !repo.WorkStatus().Ready {
+	status := repo.WorkStatus()
+	if status == git.Fail {
+		if repo.State != nil && repo.State.Message == "" {
+			// allow retry while preserving fail visualization
+		} else {
+			return false
+		}
+	} else if !status.Ready {
 		return false
 	}
 	if repo.State == nil || repo.State.Branch == nil {
@@ -1058,6 +1063,24 @@ func (m *Model) startFetchForRepos(repos []*git.Repository) tea.Cmd {
 	return tea.Batch(fetchRepositoriesCmd(eligible), tickCmd())
 }
 
+func (m *Model) maybeStartInitialFetch(repos []*git.Repository) tea.Cmd {
+	if m.initialFetchStarted || m.loading || m.terminalTooSmall() {
+		return nil
+	}
+
+	reposToUse := repos
+	if reposToUse == nil {
+		reposToUse = m.repositories
+	}
+	if len(reposToUse) == 0 {
+		return nil
+	}
+
+	cmd := m.startFetchForRepos(reposToUse)
+	m.initialFetchStarted = true
+	return cmd
+}
+
 func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 	return func() tea.Msg {
 		queue := job.CreateJobQueue()
@@ -1186,10 +1209,23 @@ func (m *Model) setCommitScrollOffset(repo *git.Repository, offset int) {
 
 func (m *Model) resetCommitScrollForSelected() {
 	repo := m.currentRepository()
-	if repo == nil || m.commitScrollOffsets == nil {
+	if repo == nil {
+		m.clearStaleGlobalError(nil)
 		return
 	}
-	delete(m.commitScrollOffsets, repo.RepoID)
+	if m.commitScrollOffsets != nil {
+		delete(m.commitScrollOffsets, repo.RepoID)
+	}
+	m.clearStaleGlobalError(repo)
+}
+
+func (m *Model) clearStaleGlobalError(repo *git.Repository) {
+	if m.err == nil {
+		return
+	}
+	if repo == nil || repo.WorkStatus() != git.Fail {
+		m.err = nil
+	}
 }
 
 func (m *Model) adjustCommitScroll(delta int) bool {
@@ -1384,7 +1420,7 @@ func (m *Model) panelLineBudget() int {
 	return budget
 }
 
-func (m *Model) commitViewportSize(total int) int {
+func (m *Model) panelViewportSize(total int) int {
 	budget := m.panelLineBudget()
 	if budget <= 0 {
 		return 0
@@ -1394,8 +1430,7 @@ func (m *Model) commitViewportSize(total int) int {
 	if remaining <= 0 {
 		return 0
 	}
-	includeBlank := remaining > 1 && total > 0
-	if includeBlank {
+	if remaining > 1 && total > 0 {
 		remaining--
 	}
 	if remaining < 0 {
@@ -1407,27 +1442,12 @@ func (m *Model) commitViewportSize(total int) int {
 	return remaining
 }
 
+func (m *Model) commitViewportSize(total int) int {
+	return m.panelViewportSize(total)
+}
+
 func (m *Model) branchViewportSize(total int) int {
-	budget := m.panelLineBudget()
-	if budget <= 0 {
-		return 0
-	}
-	// instructions line
-	remaining := budget - 1
-	if remaining <= 0 {
-		return 0
-	}
-	includeBlank := remaining > 1 && total > 0
-	if includeBlank {
-		remaining--
-	}
-	if remaining < 0 {
-		remaining = 0
-	}
-	if remaining > total {
-		remaining = total
-	}
-	return remaining
+	return m.panelViewportSize(total)
 }
 
 func (m *Model) ensureBranchCursorVisible(total, viewport int) {
@@ -1464,25 +1484,7 @@ func (m *Model) ensureBranchCursorVisible(total, viewport int) {
 }
 
 func (m *Model) remoteViewportSize(total int) int {
-	budget := m.panelLineBudget()
-	if budget <= 0 {
-		return 0
-	}
-	remaining := budget - 1
-	if remaining <= 0 {
-		return 0
-	}
-	includeBlank := remaining > 1 && total > 0
-	if includeBlank {
-		remaining--
-	}
-	if remaining < 0 {
-		remaining = 0
-	}
-	if remaining > total {
-		remaining = total
-	}
-	return remaining
+	return m.panelViewportSize(total)
 }
 
 func (m *Model) ensureRemoteCursorVisible(total, viewport int) {

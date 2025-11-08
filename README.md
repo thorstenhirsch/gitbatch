@@ -1,10 +1,9 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](/LICENSE) [![Go Report Card](https://goreportcard.com/badge/github.com/thorstenhirsch/gitbatch)](https://goreportcard.com/report/github.com/thorstenhirsch/gitbatch)
 
 ## gitbatch
-Managing multiple git repositories is easier than ever. I (*was*) often end up working on many directories and manually pulling updates etc. To make this routine faster, I created a simple tool to handle this job. Although the focus is batch jobs, you can still do de facto micro management of your git repositories (e.g *add/reset, stash, commit etc.*)
+Managing multiple git repositories is easier than ever. I (*was*) often end up working on many directories and manually pulling updates etc. To make this routine faster, I created a simple tool to handle this job. Although the focus is batch jobs, you can still do de facto micro management of your git repositories (e.g *add/reset, stash, commit etc.*). And for the more complex stuff, you can always open lazygit from within gitbatch.
 
-Check out the screencast of the app:
-[![asciicast](https://asciinema.org/a/lxoZT6Z8fSliIEebWSPVIY8ct.svg)](https://asciinema.org/a/lxoZT6Z8fSliIEebWSPVIY8ct)
+Note: This is my AI playing field, so expect weird code.
 
 ## Installation
 
@@ -32,7 +31,6 @@ For more information see the [wiki pages](https://github.com/thorstenhirsch/gitb
 
 ## Further goals
 - improve testing
-- add push
 - full src-d/go-git integration (*having some performance issues in large repos*)
   - fetch, config, rev-list, add, reset, commit, status and diff commands are supported but not fully utilized, still using git occasionally
   - merge, stash are not supported yet by go-git

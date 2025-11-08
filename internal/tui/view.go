@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -27,6 +28,9 @@ const (
 	pullable = "↘"
 
 	repoColPrefixWidth = 4 // cursor + space + status + space
+
+	minTerminalWidth  = 60
+	minTerminalHeight = 8
 )
 
 type columnWidths struct {
@@ -36,6 +40,7 @@ type columnWidths struct {
 }
 
 var panelBorderColor = lipgloss.AdaptiveColor{Light: "#7E57C2", Dark: "#9575CD"}
+var commonPanelBorderColor = lipgloss.AdaptiveColor{Light: "#FB8C00", Dark: "#FFB74D"}
 
 type panelRender struct {
 	lines       []string
@@ -147,78 +152,47 @@ func (m *Model) sidePanelLayoutDimensions(repo *git.Repository) (panelWidth int,
 }
 
 func calculateColumnWidths(totalWidth int, repos []*git.Repository) columnWidths {
-	if totalWidth <= 0 {
+	available := totalWidth - 4 // account for table borders
+	if available <= 0 {
 		return columnWidths{}
 	}
 
-	repoNameWidth := clampInt(maxRepoNameLength(repos), 0, maxRepoDisplayWidth) + 5
-	branchNameWidth := clampInt(maxBranchNameLength(repos), 0, maxBranchDisplayWidth) + 6
+	repoMin := repoColPrefixWidth + 1
+	branchMin := 1
+	commitMin := commitColumnMinWidth
 
-	widths := columnWidths{
-		repo:      repoColPrefixWidth + repoNameWidth,
-		branch:    1 + branchNameWidth,
-		commitMsg: commitColumnMinWidth,
-	}
+	repoWidth := repoMin
+	branchWidth := branchMin
+	commitWidth := commitMin
 
-	borders := 4 // │repo│branch│commit│
-	if totalWidth <= borders {
-		safeRepo := repoColPrefixWidth
-		if safeRepo > totalWidth {
-			safeRepo = totalWidth
-		}
-		if safeRepo < 0 {
-			safeRepo = 0
-		}
-		return columnWidths{repo: safeRepo, branch: 0, commitMsg: 0}
+	extra := available - (repoWidth + branchWidth + commitWidth)
+	if extra < 0 {
+		extra = 0
 	}
 
-	available := totalWidth - borders
-	if available < 0 {
-		available = 0
+	repoTarget := repoColPrefixWidth + clampInt(maxRepoNameLength(repos), 0, maxRepoDisplayWidth) + 5
+	if repoTarget < repoWidth {
+		repoTarget = repoWidth
 	}
+	growRepo := clampInt(repoTarget-repoWidth, 0, extra)
+	repoWidth += growRepo
+	extra -= growRepo
 
-	sum := widths.repo + widths.branch + widths.commitMsg
-	if sum > available {
-		deficit := sum - available
-		reduceWidth(&widths.commitMsg, &deficit, commitColumnMinWidth)
-		reduceWidth(&widths.branch, &deficit, 1)
-		reduceWidth(&widths.repo, &deficit, repoColPrefixWidth)
-		if deficit > 0 {
-			reduceWidth(&widths.commitMsg, &deficit, 1)
-		}
-		if deficit > 0 {
-			reduceWidth(&widths.branch, &deficit, 0)
-		}
-		if deficit > 0 {
-			reduceWidth(&widths.repo, &deficit, 0)
-		}
+	branchTarget := 1 + clampInt(maxBranchNameLength(repos), 0, maxBranchDisplayWidth) + 6
+	if branchTarget < branchWidth {
+		branchTarget = branchWidth
 	}
+	growBranch := clampInt(branchTarget-branchWidth, 0, extra)
+	branchWidth += growBranch
+	extra -= growBranch
 
-	if widths.repo < 0 {
-		widths.repo = 0
-	}
-	if widths.branch < 0 {
-		widths.branch = 0
-	}
-	if widths.commitMsg < 0 {
-		widths.commitMsg = 0
-	}
+	commitWidth += extra
 
-	used := widths.repo + widths.branch + widths.commitMsg
-	if used > available {
-		excess := used - available
-		reduceWidth(&widths.commitMsg, &excess, 0)
-		reduceWidth(&widths.branch, &excess, 0)
-		reduceWidth(&widths.repo, &excess, 0)
-		used = widths.repo + widths.branch + widths.commitMsg
+	return columnWidths{
+		repo:      repoWidth,
+		branch:    branchWidth,
+		commitMsg: commitWidth,
 	}
-
-	remaining := available - used
-	if remaining > 0 {
-		widths.commitMsg += remaining
-	}
-
-	return widths
 }
 
 func maxRepoNameLength(repos []*git.Repository) int {
@@ -271,28 +245,6 @@ func syncSuffix(branch *git.Branch) string {
 		return ""
 	}
 	return " " + strings.Join(parts, " ")
-}
-
-func reduceWidth(current *int, deficit *int, min int) {
-	if deficit == nil || current == nil {
-		return
-	}
-	if *deficit <= 0 {
-		return
-	}
-	if min < 0 {
-		min = 0
-	}
-	reducible := *current - min
-	if reducible <= 0 {
-		return
-	}
-	delta := reducible
-	if delta > *deficit {
-		delta = *deficit
-	}
-	*current -= delta
-	*deficit -= delta
 }
 
 func clampInt(value, min, max int) int {
@@ -421,6 +373,23 @@ func (m *Model) View() string {
 		return "Initializing..."
 	}
 
+	if m.terminalTooSmall() {
+		msg := fmt.Sprintf(
+			"terminal is too small\nminimum size: width %d, height %d",
+			minTerminalWidth,
+			minTerminalHeight,
+		)
+		styled := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#C62828")).
+			Padding(1, 2).
+			Render(msg)
+		if m.width <= 0 || m.height <= 0 {
+			return styled
+		}
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, styled)
+	}
+
 	var content string
 	var errorBanner string
 
@@ -473,6 +442,39 @@ func (m *Model) View() string {
 }
 
 // renderOverview renders the main overview with repository list
+func (m *Model) renderOverviewTitleBar() string {
+	if m.width <= 0 {
+		return ""
+	}
+	leftTitle := fmt.Sprintf(" Repositories (%d)", len(m.repositories))
+	rightTitle := fmt.Sprintf("Gitbatch %s ", m.version)
+	contentWidth := m.width - 2 // title style adds one space padding on each side
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	rightWidth := lipgloss.Width(rightTitle)
+	if rightWidth > contentWidth {
+		rightTitle = truncateString(rightTitle, contentWidth)
+		rightWidth = lipgloss.Width(rightTitle)
+	}
+	minGap := 1
+	availableForLeft := contentWidth - rightWidth - minGap
+	if availableForLeft < 0 {
+		availableForLeft = 0
+	}
+	leftRendered := truncateString(leftTitle, availableForLeft)
+	leftWidth := lipgloss.Width(leftRendered)
+	spacing := contentWidth - leftWidth - rightWidth
+	if spacing < minGap {
+		spacing = minGap
+	}
+	titleText := leftRendered + strings.Repeat(" ", spacing) + rightTitle
+	if lipgloss.Width(titleText) < contentWidth {
+		titleText += strings.Repeat(" ", contentWidth-lipgloss.Width(titleText))
+	}
+	return m.styles.Title.Width(m.width).Render(titleText)
+}
+
 func (m *Model) renderOverview() string {
 	if len(m.repositories) == 0 {
 		if m.loading {
@@ -506,34 +508,7 @@ func (m *Model) renderOverview() string {
 	// Compute column widths based on content and available width
 	colWidths := calculateColumnWidths(m.width, m.repositories)
 
-	// Render title - stretch across full width (account for style padding)
-	leftTitle := fmt.Sprintf(" Repositories (%d)", len(m.repositories))
-	rightTitle := fmt.Sprintf("Gitbatch %s ", m.version)
-	contentWidth := m.width - 2 // title style adds one space padding on each side
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
-	rightWidth := lipgloss.Width(rightTitle)
-	if rightWidth > contentWidth {
-		rightTitle = truncateString(rightTitle, contentWidth)
-		rightWidth = lipgloss.Width(rightTitle)
-	}
-	minGap := 1
-	availableForLeft := contentWidth - rightWidth - minGap
-	if availableForLeft < 0 {
-		availableForLeft = 0
-	}
-	leftRendered := truncateString(leftTitle, availableForLeft)
-	leftWidth := lipgloss.Width(leftRendered)
-	spacing := contentWidth - leftWidth - rightWidth
-	if spacing < minGap {
-		spacing = minGap
-	}
-	titleText := leftRendered + strings.Repeat(" ", spacing) + rightTitle
-	if lipgloss.Width(titleText) < contentWidth {
-		titleText += strings.Repeat(" ", contentWidth-lipgloss.Width(titleText))
-	}
-	title := m.styles.Title.Width(m.width).Render(titleText)
+	title := m.renderOverviewTitleBar()
 
 	var topLabel, bottomLabel string
 	if startIdx > 0 {
@@ -658,16 +633,18 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
 	if selected {
-		if dirty || failed {
-			highlight := m.styles.DirtySelectedItem
-			styledRepoCol = highlight.Render(repoColumn)
-			styledBranchCol = highlight.Render(branchColumn)
-			styledCommitCol = highlight.Render(commitColumn)
-		} else {
-			styledRepoCol = m.styles.SelectedItem.Render(repoColumn)
-			styledBranchCol = m.styles.SelectedItem.Render(branchColumn)
-			styledCommitCol = m.styles.SelectedItem.Render(commitColumn)
+		var highlight lipgloss.Style
+		switch {
+		case failed:
+			highlight = m.styles.FailedSelectedItem
+		case dirty:
+			highlight = m.styles.DirtySelectedItem
+		default:
+			highlight = m.styles.SelectedItem
 		}
+		styledRepoCol = highlight.Render(repoColumn)
+		styledBranchCol = highlight.Render(branchColumn)
+		styledCommitCol = highlight.Render(commitColumn)
 	} else {
 		styledRepoCol = style.Render(repoColumn)
 		styledBranchCol = style.Render(branchColumn)
@@ -910,8 +887,21 @@ func (m *Model) renderFocus() string {
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
-	maxLines := m.overviewTableBodyHeight() - 1
-	if maxLines <= 0 {
+	bodyHeight := m.height - m.overviewTitleHeight() - 1
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	mainInfoHeight := lipgloss.Height(mainInfo)
+	padLines := m.sidePanelTopPadding()
+	panelFrameHeight := 3
+	maxLines := bodyHeight - padLines - panelFrameHeight
+	if !horizontalOK {
+		available := bodyHeight - mainInfoHeight - padLines - panelFrameHeight
+		if available < maxLines {
+			maxLines = available
+		}
+	}
+	if maxLines < 1 {
 		maxLines = 1
 	}
 
@@ -964,11 +954,9 @@ func (m *Model) renderFocus() string {
 		case RemotePanel:
 			panelHasItems = len(m.remotePanelItems()) > 0
 		}
-		borderColor := tagHighlightColor
-		if !panelHasItems {
-			borderColor = tagWarningColor
+		if panelHasItems {
+			panelStyle = panelStyle.BorderForeground(commonPanelBorderColor)
 		}
-		panelStyle = panelStyle.BorderForeground(borderColor)
 	}
 
 	styledPanel := panelStyle.Render(panel)
@@ -976,16 +964,22 @@ func (m *Model) renderFocus() string {
 		styledPanel = strings.Repeat("\n", pad) + styledPanel
 	}
 
+	var combined string
 	if !horizontalOK {
-		return lipgloss.JoinVertical(lipgloss.Left, mainInfo, styledPanel)
+		combined = lipgloss.JoinVertical(lipgloss.Left, mainInfo, styledPanel)
+	} else {
+		gap := ""
+		if gapWidth > 0 {
+			gap = strings.Repeat(" ", gapWidth)
+		}
+		combined = lipgloss.JoinHorizontal(lipgloss.Top, mainInfo, gap, styledPanel)
 	}
 
-	gap := ""
-	if gapWidth > 0 {
-		gap = strings.Repeat(" ", gapWidth)
+	title := m.renderOverviewTitleBar()
+	if title != "" {
+		return lipgloss.JoinVertical(lipgloss.Left, title, combined)
 	}
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, mainInfo, gap, styledPanel)
+	return combined
 }
 
 // renderRepositoryInfo renders basic repository information
@@ -1084,6 +1078,10 @@ func (m *Model) renderBranches(r *git.Repository, contentWidth, maxLines int) st
 		remaining--
 	}
 
+	selectedStyle := m.styles.SelectedItem
+	if m.hasMultipleTagged() && len(items) > 0 {
+		selectedStyle = m.styles.CommonSelectedItem
+	}
 	for i := start; i < end && remaining > 0; i++ {
 		item := items[i]
 		prefix := "  "
@@ -1092,7 +1090,7 @@ func (m *Model) renderBranches(r *git.Repository, contentWidth, maxLines int) st
 		}
 		line := prefix + item.Name
 		if i == m.branchCursor {
-			line = m.styles.SelectedItem.Render(padToWidth(line, contentWidth))
+			line = selectedStyle.Render(padToWidth(line, contentWidth))
 		} else {
 			line = padToWidth(line, contentWidth)
 		}
@@ -1174,11 +1172,15 @@ func (m *Model) renderRemotes(r *git.Repository, contentWidth, maxLines int) str
 		remaining--
 	}
 
+	selectedStyle := m.styles.SelectedItem
+	if m.hasMultipleTagged() && len(items) > 0 {
+		selectedStyle = m.styles.CommonSelectedItem
+	}
 	for i := start; i < end && remaining > 0; i++ {
 		item := items[i]
 		line := fmt.Sprintf("%s %s", item.RemoteName, item.BranchName)
 		if i == m.remoteBranchCursor {
-			line = m.styles.SelectedItem.Render(padToWidth(line, contentWidth))
+			line = selectedStyle.Render(padToWidth(line, contentWidth))
 		} else {
 			line = padToWidth(line, contentWidth)
 		}
@@ -1393,13 +1395,11 @@ func (m *Model) renderStatusBar() string {
 		}
 	}
 
+	focusRepo := m.currentRepository()
+	dirty := repoIsDirty(focusRepo)
+	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
+
 	center := ""
-	if queuedCount > 0 {
-		center = fmt.Sprintf("Queue: %d", queuedCount)
-	}
-	if center == "" && m.activeForcePrompt == nil && m.activeCredentialPrompt == nil {
-		center = "f fetch | p pull | P push"
-	}
 
 	right := "TAB: lazygit | ? for help"
 	if m.currentView == FocusView {
@@ -1409,23 +1409,40 @@ func (m *Model) renderStatusBar() string {
 	leftWidth := lipgloss.Width(left)
 	rightWidth := lipgloss.Width(right)
 
-	focusRepo := m.currentRepository()
-	dirty := repoIsDirty(focusRepo)
-	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
+	if center == "" {
+		tagHint := "space: tag for batch run"
+		if focusRepo != nil && focusRepo.WorkStatus() == git.Queued {
+			tagHint = "space: untag"
+		}
+		if queuedCount > 0 {
+			tagHint += " | enter: batch run"
+			center = fmt.Sprintf("tagged: %d | %s", queuedCount, tagHint)
+		} else if m.activeForcePrompt == nil && m.activeCredentialPrompt == nil {
+			center = "f fetch | p pull | P push | space: tag for batch run"
+		}
+	}
 
-	if m.activeCredentialPrompt != nil {
+	if center == "" && m.activeCredentialPrompt != nil {
 		statusBarStyle = m.styles.StatusBarMerge
 		repoName := "credentials"
 		if m.activeCredentialPrompt.repo != nil {
 			repoName = truncateString(m.activeCredentialPrompt.repo.Name, 20)
 		}
 		left = fmt.Sprintf(" auth required: %s", repoName)
-		if m.credentialInputField == credentialFieldUsername {
-			center = "Enter username"
-		} else {
-			center = "Enter password"
+
+		label := "Username"
+		display := m.credentialInputBuffer
+		if m.credentialInputField == credentialFieldPassword {
+			label = "Password"
+			display = strings.Repeat("*", utf8.RuneCountInString(m.credentialInputBuffer))
 		}
-		right = "enter: submit | tab: switch | esc: cancel"
+
+		right = "enter: submit | esc: cancel"
+		maxCenter := totalWidth - lipgloss.Width(left) - lipgloss.Width(right) - 2
+		if maxCenter < 0 {
+			maxCenter = 0
+		}
+		center = truncateString(fmt.Sprintf("%s: %s", label, display), maxCenter)
 	} else {
 		if failed {
 			statusBarStyle = m.styles.StatusBarError
@@ -1460,6 +1477,8 @@ func (m *Model) renderStatusBar() string {
 			left = fmt.Sprintf(" %s %s push failed", pushSymbol, repoName)
 			center = "Retry push with --force?"
 			right = "return: confirm | esc: cancel"
+		} else if !failed && !dirty && m.err == nil {
+			center = fmt.Sprintf("%s", center)
 		}
 	}
 
@@ -1494,7 +1513,7 @@ Navigation:  ↑/k up   g/Home top        ↓/j down G/End bottom
              Ctrl+U half page up        Ctrl+D half page down
 
 Actions:     Space   toggle queue       Enter   start queue
-             a       queue all          A       unqueue all
+			 a       tag all            A       untag all
              m       cycle mode         Tab     open lazygit
 
 Views:       b  branches    c  commits    r  remotes

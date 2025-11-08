@@ -18,13 +18,14 @@ type Model struct {
 	version      string
 
 	// UI state
-	cursor      int
-	width       int
-	height      int
-	ready       bool
-	loading     bool
-	jobsRunning bool
-	err         error
+	cursor              int
+	width               int
+	height              int
+	ready               bool
+	initialFetchStarted bool
+	loading             bool
+	jobsRunning         bool
+	err                 error
 
 	// View state
 	currentView            ViewType
@@ -121,30 +122,32 @@ var tagWarningColor = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
-	App               lipgloss.Style
-	Title             lipgloss.Style
-	StatusBarPull     lipgloss.Style
-	StatusBarMerge    lipgloss.Style
-	StatusBarRebase   lipgloss.Style
-	StatusBarPush     lipgloss.Style
-	StatusBarDirty    lipgloss.Style
-	StatusBarError    lipgloss.Style
-	Help              lipgloss.Style
-	List              lipgloss.Style
-	ListItem          lipgloss.Style
-	SelectedItem      lipgloss.Style
-	DirtySelectedItem lipgloss.Style
-	QueuedItem        lipgloss.Style
-	WorkingItem       lipgloss.Style
-	SuccessItem       lipgloss.Style
-	FailedItem        lipgloss.Style
-	DisabledItem      lipgloss.Style
-	BranchInfo        lipgloss.Style
-	KeyBinding        lipgloss.Style
-	Panel             lipgloss.Style
-	PanelTitle        lipgloss.Style
-	Error             lipgloss.Style
-	TableBorder       lipgloss.Style
+	App                lipgloss.Style
+	Title              lipgloss.Style
+	StatusBarPull      lipgloss.Style
+	StatusBarMerge     lipgloss.Style
+	StatusBarRebase    lipgloss.Style
+	StatusBarPush      lipgloss.Style
+	StatusBarDirty     lipgloss.Style
+	StatusBarError     lipgloss.Style
+	Help               lipgloss.Style
+	List               lipgloss.Style
+	ListItem           lipgloss.Style
+	SelectedItem       lipgloss.Style
+	DirtySelectedItem  lipgloss.Style
+	CommonSelectedItem lipgloss.Style
+	FailedSelectedItem lipgloss.Style
+	QueuedItem         lipgloss.Style
+	WorkingItem        lipgloss.Style
+	SuccessItem        lipgloss.Style
+	FailedItem         lipgloss.Style
+	DisabledItem       lipgloss.Style
+	BranchInfo         lipgloss.Style
+	KeyBinding         lipgloss.Style
+	Panel              lipgloss.Style
+	PanelTitle         lipgloss.Style
+	Error              lipgloss.Style
+	TableBorder        lipgloss.Style
 }
 
 // DefaultStyles returns the default style set
@@ -178,7 +181,7 @@ func DefaultStyles() *Styles {
 			Padding(0, 1),
 		StatusBarPush: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
-			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFF59D", Dark: "#FDD835"}).
 			Padding(0, 1),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
@@ -189,9 +192,17 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#0B0B0B", Dark: "#F5F5F5"}).
 			Background(lipgloss.AdaptiveColor{Light: "#90CAF9", Dark: "#1976D2"}).
 			Bold(true),
+		CommonSelectedItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
+			Bold(true),
 		DirtySelectedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#424242", Dark: "#BDBDBD"}).
 			Background(lipgloss.AdaptiveColor{Light: "#E0E0E0", Dark: "#424242"}).
+			Bold(true),
+		FailedSelectedItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#C62828"}).
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
 			Foreground(tagHighlightColor),
@@ -253,6 +264,10 @@ func New(mode string, directories []string) *Model {
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
 	return loadRepositoriesCmd(m.directories)
+}
+
+func (m *Model) terminalTooSmall() bool {
+	return m.width < minTerminalWidth || m.height < minTerminalHeight
 }
 
 // repositoriesLoadedMsg is sent when all repositories are loaded
