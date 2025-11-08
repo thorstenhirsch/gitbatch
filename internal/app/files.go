@@ -104,9 +104,15 @@ func separateDirectories(directory string) ([]string, []string, error) {
 			continue
 		}
 
-		// Only process directories (not files)
 		info, err := os.Stat(dir)
-		if err != nil || !info.IsDir() {
+		if err != nil {
+			continue
+		}
+		// Treat .gitmodules as searchable even if it's a file so submodules are discovered
+		if !info.IsDir() {
+			if f.Name() == ".gitmodules" {
+				dirs = append(dirs, dir)
+			}
 			continue
 		}
 

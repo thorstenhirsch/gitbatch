@@ -13,14 +13,15 @@ import (
 
 const (
 	queuedSymbol  = "●"
-	workingSymbol = "◉"
 	successSymbol = "✓"
 	failSymbol    = "✗"
+	dirtySymbol   = "⚠"
 
-	fetchSymbol    = "↓"
-	pullSymbol     = "↓↳"
-	mergeSymbol    = "↳"
-	checkoutSymbol = "↱"
+	pullSymbol    = "↓"
+	mergeSymbol   = "↣"
+	rebaseSymbol  = "↯"
+	pushSymbol    = "↑"
+	waitingSymbol = "…"
 
 	pushable = "↖"
 	pullable = "↘"
@@ -46,7 +47,7 @@ func calculateColumnWidths(totalWidth int, repos []*git.Repository) columnWidths
 	}
 
 	repoNameWidth := clampInt(maxRepoNameLength(repos), 0, maxRepoDisplayWidth) + 5
-	branchNameWidth := clampInt(maxBranchNameLength(repos), 0, maxBranchDisplayWidth) + 5
+	branchNameWidth := clampInt(maxBranchNameLength(repos), 0, maxBranchDisplayWidth) + 6
 
 	widths := columnWidths{
 		repo:      repoColPrefixWidth + repoNameWidth,
@@ -223,15 +224,24 @@ func (m *Model) renderTableBorder(colWidths columnWidths, borderType string) str
 
 // View renders the UI
 func (m *Model) View() string {
-	if m.err != nil {
-		return m.styles.Error.Render("Error: " + m.err.Error())
-	}
-
 	if !m.ready {
 		return "Initializing..."
 	}
 
 	var content string
+	var errorBanner string
+
+	if m.err != nil {
+		errText := formatErrorForDisplay(m.err)
+		trimWidth := m.width
+		switch {
+		case trimWidth > 2:
+			errText = truncateString(errText, trimWidth-2)
+		case trimWidth > 0:
+			errText = truncateString(errText, trimWidth)
+		}
+		errorBanner = m.styles.Error.Width(m.width).Render(" " + errText)
+	}
 
 	if m.currentView == OverviewView {
 		content = m.renderOverview()
@@ -239,13 +249,23 @@ func (m *Model) View() string {
 		content = m.renderFocus()
 	}
 
-	// Status bar is always at the bottom
-	statusBar := m.renderStatusBar()
-
 	if m.showHelp {
 		help := m.renderHelp()
 		content = lipgloss.JoinVertical(lipgloss.Left, content, help)
 	}
+
+	if errorBanner != "" {
+		content = lipgloss.JoinVertical(lipgloss.Left, errorBanner, content)
+	}
+
+	if m.activeCredentialPrompt != nil {
+		if prompt := m.renderCredentialPrompt(); prompt != "" {
+			content = lipgloss.JoinVertical(lipgloss.Left, content, prompt)
+		}
+	}
+
+	// Status bar is always at the bottom
+	statusBar := m.renderStatusBar()
 
 	// Fill remaining space and ensure status bar is at bottom
 	contentHeight := lipgloss.Height(content)
@@ -293,8 +313,33 @@ func (m *Model) renderOverview() string {
 	// Compute column widths based on content and available width
 	colWidths := calculateColumnWidths(m.width, m.repositories)
 
-	// Render title - stretch across full width
-	titleText := fmt.Sprintf(" Matched Repositories (%d) ", len(m.repositories))
+	// Render title - stretch across full width (account for style padding)
+	leftTitle := fmt.Sprintf(" Repositories (%d)", len(m.repositories))
+	rightTitle := fmt.Sprintf("Gitbatch %s ", m.version)
+	contentWidth := m.width - 2 // title style adds one space padding on each side
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	rightWidth := lipgloss.Width(rightTitle)
+	if rightWidth > contentWidth {
+		rightTitle = truncateString(rightTitle, contentWidth)
+		rightWidth = lipgloss.Width(rightTitle)
+	}
+	minGap := 1
+	availableForLeft := contentWidth - rightWidth - minGap
+	if availableForLeft < 0 {
+		availableForLeft = 0
+	}
+	leftRendered := truncateString(leftTitle, availableForLeft)
+	leftWidth := lipgloss.Width(leftRendered)
+	spacing := contentWidth - leftWidth - rightWidth
+	if spacing < minGap {
+		spacing = minGap
+	}
+	titleText := leftRendered + strings.Repeat(" ", spacing) + rightTitle
+	if lipgloss.Width(titleText) < contentWidth {
+		titleText += strings.Repeat(" ", contentWidth-lipgloss.Width(titleText))
+	}
 	title := m.styles.Title.Width(m.width).Render(titleText)
 
 	// Top border for table
@@ -344,13 +389,20 @@ func (m *Model) renderOverview() string {
 func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths columnWidths) string {
 	statusIcon := " "
 	style := m.styles.ListItem
+	dirty := repoIsDirty(r)
 
-	switch r.WorkStatus() {
+	switch status := r.WorkStatus(); status {
+	case git.Pending:
+		statusIcon = waitingSymbol
 	case git.Queued:
 		statusIcon = queuedSymbol
 		style = m.styles.QueuedItem
 	case git.Working:
-		statusIcon = workingSymbol
+		if len(spinnerFrames) > 0 {
+			statusIcon = spinnerFrames[m.spinnerIndex%len(spinnerFrames)]
+		} else {
+			statusIcon = "*"
+		}
 		style = m.styles.WorkingItem
 	case git.Success:
 		statusIcon = successSymbol
@@ -358,6 +410,10 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	case git.Fail:
 		statusIcon = failSymbol
 		style = m.styles.FailedItem
+	}
+	if dirty {
+		statusIcon = dirtySymbol
+		style = m.styles.DisabledItem
 	}
 
 	cursor := " "
@@ -371,6 +427,9 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	repoName := truncateString(r.Name, repoNameWidth)
 	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
+	if dirty {
+		repoColumn = m.styles.DisabledItem.Render(repoColumn)
+	}
 
 	branchContentWidth := colWidths.branch - 1
 	if branchContentWidth < 0 {
@@ -378,6 +437,9 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	branchContent := truncateString(branchContent(r), branchContentWidth)
 	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
+	if dirty {
+		branchColumn = m.styles.DisabledItem.Render(branchColumn)
+	}
 
 	commitMsg, commitHash := commitSummary(r)
 	tags := collectTags(r, commitHash)
@@ -397,8 +459,15 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	if commitContentWidth < 0 {
 		commitContentWidth = 0
 	}
-	commitContent = truncateString(commitContent, commitContentWidth)
+	if r.WorkStatus() == git.Fail && r.State != nil && r.State.Message != "" {
+		commitContent = truncateString(singleLineMessage(r.State.Message), commitContentWidth)
+	} else {
+		commitContent = truncateString(commitContent, commitContentWidth)
+	}
 	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
+	if dirty {
+		commitColumn = m.styles.DisabledItem.Render(commitColumn)
+	}
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
 	if selected {
@@ -486,6 +555,23 @@ func firstLine(message string) string {
 		message = message[:idx]
 	}
 	return strings.TrimSpace(message)
+}
+
+func singleLineMessage(message string) string {
+	message = strings.ReplaceAll(message, "\r", " ")
+	message = strings.ReplaceAll(message, "\n", " ")
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return message
+	}
+	return strings.Join(strings.Fields(message), " ")
+}
+
+func formatErrorForDisplay(err error) string {
+	if err == nil {
+		return ""
+	}
+	return singleLineMessage("Error: " + err.Error())
 }
 
 // truncateString truncates a string to the specified length, adding "..." if needed
@@ -804,18 +890,19 @@ func (m *Model) renderStash(r *git.Repository) string {
 
 // renderStatusBar renders the bottom status bar
 func (m *Model) renderStatusBar() string {
-	modeSymbol := fetchSymbol
-	statusBarStyle := m.styles.StatusBarFetch
+	modeSymbol := pullSymbol
+	statusBarStyle := m.styles.StatusBarPull
+	totalWidth := m.width
 	switch m.mode.ID {
-	case PullMode:
-		modeSymbol = pullSymbol
-		statusBarStyle = m.styles.StatusBarPull
 	case MergeMode:
 		modeSymbol = mergeSymbol
 		statusBarStyle = m.styles.StatusBarMerge
-	case CheckoutMode:
-		modeSymbol = checkoutSymbol
-		statusBarStyle = m.styles.StatusBarFetch // Use fetch style for checkout
+	case RebaseMode:
+		modeSymbol = rebaseSymbol
+		statusBarStyle = m.styles.StatusBarRebase
+	case PushMode:
+		modeSymbol = pushSymbol
+		statusBarStyle = m.styles.StatusBarPush
 	}
 
 	left := fmt.Sprintf(" %s %s", modeSymbol, m.mode.DisplayString)
@@ -831,16 +918,60 @@ func (m *Model) renderStatusBar() string {
 	if queuedCount > 0 {
 		center = fmt.Sprintf("Queue: %d", queuedCount)
 	}
+	if center == "" && m.activeForcePrompt == nil && m.activeCredentialPrompt == nil {
+		center = "f fetch | p pull | P push"
+	}
 
 	right := "TAB: lazygit | ? for help"
 	if m.currentView == FocusView {
 		right = "ESC: back | TAB: lazygit | ? for help"
 	}
 
-	// Calculate spacing - ensure we don't overflow the width
-	totalWidth := m.width
 	leftWidth := lipgloss.Width(left)
 	rightWidth := lipgloss.Width(right)
+
+	focusRepo := m.currentRepository()
+	dirty := repoIsDirty(focusRepo)
+
+	if m.activeCredentialPrompt != nil {
+		statusBarStyle = m.styles.StatusBarMerge
+		repoName := "credentials"
+		if m.activeCredentialPrompt.repo != nil {
+			repoName = truncateString(m.activeCredentialPrompt.repo.Name, 20)
+		}
+		left = fmt.Sprintf(" auth required: %s", repoName)
+		if m.credentialInputField == credentialFieldUsername {
+			center = "Enter username"
+		} else {
+			center = "Enter password"
+		}
+		right = "enter: submit | tab: switch | esc: cancel"
+	} else {
+		if dirty {
+			statusBarStyle = m.styles.StatusBarMerge
+			left = " repo dirty"
+			center = "Only TAB (lazygit) permitted while working tree is dirty"
+			right = "TAB: lazygit | esc: cancel"
+		} else if m.err != nil {
+			statusBarStyle = m.styles.StatusBarPush
+			maxCenter := totalWidth - leftWidth - rightWidth - 2
+			if maxCenter < 0 {
+				maxCenter = 0
+			}
+			center = truncateString(formatErrorForDisplay(m.err), maxCenter)
+		}
+		if m.activeForcePrompt != nil && m.activeForcePrompt.repo != nil {
+			statusBarStyle = m.styles.StatusBarPush
+			repoName := truncateString(m.activeForcePrompt.repo.Name, 20)
+			left = fmt.Sprintf(" %s %s push failed", pushSymbol, repoName)
+			center = "Retry push with --force?"
+			right = "return: confirm | esc: cancel"
+		}
+	}
+
+	// Calculate spacing - ensure we don't overflow the width
+	leftWidth = lipgloss.Width(left)
+	rightWidth = lipgloss.Width(right)
 	centerWidth := lipgloss.Width(center)
 
 	spacing := totalWidth - leftWidth - rightWidth - centerWidth - 2 // -2 for safety margin
@@ -877,8 +1008,54 @@ Views:       b  branches    c  commits    r  remotes
 
 Sorting:     n  by name     t  by time
 
-Other:       ?  help        q/Ctrl+C  quit
+Git:         f  fetch repo   p  pull repo   P  push repo
+Other:       ?  help         q/Ctrl+C  quit
 `
 
 	return m.styles.Help.Render(help)
+}
+
+func (m *Model) renderCredentialPrompt() string {
+	prompt := m.activeCredentialPrompt
+	if prompt == nil {
+		return ""
+	}
+	repoName := "repository"
+	if prompt.repo != nil && prompt.repo.Name != "" {
+		repoName = prompt.repo.Name
+	}
+	panelWidth := m.width
+	if panelWidth < 24 {
+		panelWidth = 24
+	}
+	contentWidth := panelWidth - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+	usernameDisplay := prompt.username
+	if m.credentialInputField == credentialFieldUsername {
+		usernameDisplay = m.credentialInputBuffer
+	}
+	passwordLen := len([]rune(prompt.password))
+	if m.credentialInputField == credentialFieldPassword {
+		passwordLen = len([]rune(m.credentialInputBuffer))
+	}
+	passwordDisplay := strings.Repeat("*", passwordLen)
+	usernameIndicator := " "
+	passwordIndicator := " "
+	if m.credentialInputField == credentialFieldUsername {
+		usernameIndicator = ">"
+	} else {
+		passwordIndicator = ">"
+	}
+	lines := []string{
+		fmt.Sprintf("Credentials required for %s", truncateString(repoName, contentWidth)),
+		"",
+		fmt.Sprintf("%s Username: %s", usernameIndicator, truncateString(usernameDisplay, contentWidth-11)),
+		fmt.Sprintf("%s Password: %s", passwordIndicator, truncateString(passwordDisplay, contentWidth-11)),
+		"",
+		"enter: submit | tab: switch field | esc: cancel",
+	}
+	content := strings.Join(lines, "\n")
+	return m.styles.Panel.Width(panelWidth).Render(content)
 }

@@ -10,12 +10,12 @@ import (
 // Model represents the main application state for Bubbletea
 type Model struct {
 	// Application state
-	repositories  []*git.Repository
-	directories   []string
-	mode          Mode
-	queue         *job.Queue
-	failoverQueue *job.Queue
-	targetBranch  string
+	repositories []*git.Repository
+	directories  []string
+	mode         Mode
+	queue        *job.Queue
+	spinnerIndex int
+	version      string
 
 	// UI state
 	cursor      int
@@ -27,13 +27,19 @@ type Model struct {
 	err         error
 
 	// View state
-	currentView        ViewType
-	sidePanel          SidePanelType
-	showHelp           bool
-	branchCursor       int
-	remoteBranchCursor int
-	commitCursor       int
-	commitOffset       int
+	currentView            ViewType
+	sidePanel              SidePanelType
+	showHelp               bool
+	branchCursor           int
+	remoteBranchCursor     int
+	commitCursor           int
+	commitOffset           int
+	forcePromptQueue       []*forcePushPrompt
+	activeForcePrompt      *forcePushPrompt
+	credentialPromptQueue  []*credentialPrompt
+	activeCredentialPrompt *credentialPrompt
+	credentialInputField   credentialField
+	credentialInputBuffer  string
 
 	// Styles
 	styles *Styles
@@ -67,49 +73,71 @@ type Mode struct {
 	CommandString string
 }
 
+type forcePushPrompt struct {
+	repo *git.Repository
+}
+
+type credentialPrompt struct {
+	repo     *git.Repository
+	job      *job.Job
+	username string
+	password string
+}
+
+type credentialField int
+
+const (
+	credentialFieldUsername credentialField = iota
+	credentialFieldPassword
+)
+
 // ModeID identifies the mode
 type ModeID string
 
 const (
-	FetchMode    ModeID = "fetch"
-	PullMode     ModeID = "pull"
-	MergeMode    ModeID = "merge"
-	CheckoutMode ModeID = "checkout"
+	PullMode   ModeID = "pull"
+	MergeMode  ModeID = "merge"
+	RebaseMode ModeID = "rebase"
+	PushMode   ModeID = "push"
 )
 
 var (
-	fetchMode    = Mode{ID: FetchMode, DisplayString: "Fetch", CommandString: "fetch"}
-	pullMode     = Mode{ID: PullMode, DisplayString: "Pull", CommandString: "pull"}
-	mergeMode    = Mode{ID: MergeMode, DisplayString: "Merge", CommandString: "merge"}
-	checkoutMode = Mode{ID: CheckoutMode, DisplayString: "Checkout", CommandString: "checkout"}
+	pullMode   = Mode{ID: PullMode, DisplayString: "Pull (ff-only)", CommandString: "pull --ff-only"}
+	mergeMode  = Mode{ID: MergeMode, DisplayString: "Merge", CommandString: "merge"}
+	rebaseMode = Mode{ID: RebaseMode, DisplayString: "Rebase", CommandString: "pull --rebase"}
+	pushMode   = Mode{ID: PushMode, DisplayString: "Push", CommandString: "push"}
 
-	modes = []Mode{fetchMode, pullMode, mergeMode}
+	modes = []Mode{pullMode, mergeMode, rebaseMode, pushMode}
 )
+
+var spinnerFrames = []string{"|", "/", "-", "\\"}
 
 var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}
 var tagWarningColor = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
-	App            lipgloss.Style
-	Title          lipgloss.Style
-	StatusBarFetch lipgloss.Style
-	StatusBarPull  lipgloss.Style
-	StatusBarMerge lipgloss.Style
-	Help           lipgloss.Style
-	List           lipgloss.Style
-	ListItem       lipgloss.Style
-	SelectedItem   lipgloss.Style
-	QueuedItem     lipgloss.Style
-	WorkingItem    lipgloss.Style
-	SuccessItem    lipgloss.Style
-	FailedItem     lipgloss.Style
-	BranchInfo     lipgloss.Style
-	KeyBinding     lipgloss.Style
-	Panel          lipgloss.Style
-	PanelTitle     lipgloss.Style
-	Error          lipgloss.Style
-	TableBorder    lipgloss.Style
+	App             lipgloss.Style
+	Title           lipgloss.Style
+	StatusBarPull   lipgloss.Style
+	StatusBarMerge  lipgloss.Style
+	StatusBarRebase lipgloss.Style
+	StatusBarPush   lipgloss.Style
+	Help            lipgloss.Style
+	List            lipgloss.Style
+	ListItem        lipgloss.Style
+	SelectedItem    lipgloss.Style
+	QueuedItem      lipgloss.Style
+	WorkingItem     lipgloss.Style
+	SuccessItem     lipgloss.Style
+	FailedItem      lipgloss.Style
+	DisabledItem    lipgloss.Style
+	BranchInfo      lipgloss.Style
+	KeyBinding      lipgloss.Style
+	Panel           lipgloss.Style
+	PanelTitle      lipgloss.Style
+	Error           lipgloss.Style
+	TableBorder     lipgloss.Style
 }
 
 // DefaultStyles returns the default style set
@@ -121,17 +149,21 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#7E57C2"}).
 			Padding(0, 1),
-		StatusBarFetch: lipgloss.NewStyle().
+		StatusBarPull: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#90CAF9", Dark: "#1E88E5"}).
 			Padding(0, 1),
-		StatusBarPull: lipgloss.NewStyle().
+		StatusBarMerge: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
+			Padding(0, 1),
+		StatusBarRebase: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#A5D6A7", Dark: "#43A047"}).
 			Padding(0, 1),
-		StatusBarMerge: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
-			Background(lipgloss.AdaptiveColor{Light: "#FFE082", Dark: "#FFA000"}).
+		StatusBarPush: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#B71C1C", Dark: "#C62828"}).
 			Padding(0, 1),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
@@ -149,6 +181,9 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#388E3C", Dark: "#81C784"}),
 		FailedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}),
+		DisabledItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#9E9E9E", Dark: "#616161"}).
+			Faint(true),
 		BranchInfo: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#00796B", Dark: "#4DB6AC"}),
 		KeyBinding: lipgloss.NewStyle().
@@ -171,7 +206,7 @@ func DefaultStyles() *Styles {
 
 // New creates a new Model with the given configuration
 func New(mode string, directories []string) *Model {
-	initialMode := fetchMode
+	initialMode := pullMode
 	for _, m := range modes {
 		if string(m.ID) == mode {
 			initialMode = m
@@ -180,15 +215,16 @@ func New(mode string, directories []string) *Model {
 	}
 
 	return &Model{
-		directories:   directories,
-		mode:          initialMode,
-		queue:         job.CreateJobQueue(),
-		failoverQueue: job.CreateJobQueue(),
-		repositories:  make([]*git.Repository, 0),
-		currentView:   OverviewView,
-		sidePanel:     NonePanel,
-		styles:        DefaultStyles(),
-		loading:       true,
+		directories:  directories,
+		mode:         initialMode,
+		queue:        job.CreateJobQueue(),
+		repositories: make([]*git.Repository, 0),
+		currentView:  OverviewView,
+		sidePanel:    NonePanel,
+		styles:       DefaultStyles(),
+		loading:      true,
+		spinnerIndex: 0,
+		version:      Version,
 	}
 }
 
@@ -214,6 +250,17 @@ type lazygitClosedMsg struct{}
 
 // jobCompletedMsg is sent when a job completes (success or failure)
 type jobCompletedMsg struct{}
+
+// jobQueueResultMsg delivers the outcome of an async job queue execution
+type jobQueueResultMsg struct {
+	resetMainQueue bool
+	failures       map[*job.Job]error
+}
+
+// autoFetchFailedMsg signals non-fatal fetch failures during initial load
+type autoFetchFailedMsg struct {
+	names []string
+}
 
 // repoActionResultMsg is sent when a focus view action updates repository state
 type repoActionResultMsg struct {

@@ -15,6 +15,8 @@ type Queue struct {
 	series []*Job
 }
 
+const maxConcurrentJobs = 5
+
 // CreateJobQueue creates a jobqueue struct and initialize its slice then return
 // its pointer
 func CreateJobQueue() (jq *Queue) {
@@ -95,8 +97,17 @@ func (jq *Queue) StartJobsAsync() map[*Job]error {
 
 	var (
 		maxWorkers = runtime.GOMAXPROCS(0)
-		sem        = semaphore.NewWeighted(int64(maxWorkers))
-		fails      = make(map[*Job]error)
+	)
+	if maxWorkers > maxConcurrentJobs {
+		maxWorkers = maxConcurrentJobs
+	}
+	if maxWorkers < 1 {
+		maxWorkers = 1
+	}
+
+	var (
+		sem   = semaphore.NewWeighted(int64(maxWorkers))
+		fails = make(map[*Job]error)
 	)
 
 	var wg sync.WaitGroup

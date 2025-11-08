@@ -56,7 +56,7 @@ func (a *App) Run() error {
 func overrideConfig(appConfig, setupConfig *Config) *Config {
 	// CLI arguments should always override config file values
 	// Only keep appConfig values if setupConfig values are unset/default
-	
+
 	if len(setupConfig.Directories) > 0 {
 		appConfig.Directories = setupConfig.Directories
 	}
@@ -66,7 +66,7 @@ func overrideConfig(appConfig, setupConfig *Config) *Config {
 	// Always use setupConfig.Depth, even if it's 0 (explicit choice)
 	// This allows users to override config file with depth=0
 	appConfig.Depth = setupConfig.Depth
-	
+
 	if setupConfig.QuickMode {
 		appConfig.QuickMode = setupConfig.QuickMode
 	}
@@ -77,9 +77,13 @@ func overrideConfig(appConfig, setupConfig *Config) *Config {
 }
 
 func (a *App) execQuickMode(directories []string) error {
-	if a.Config.Mode != "fetch" && a.Config.Mode != "pull" {
+	mode := a.Config.Mode
+	if mode == "fetch" {
+		mode = "pull"
+	}
+	if mode != "pull" && mode != "merge" && mode != "rebase" {
 		return fmt.Errorf("unrecognized quick mode: %s", a.Config.Mode)
 	}
 
-	return quick(directories, a.Config.Mode)
+	return quick(directories, mode)
 }
