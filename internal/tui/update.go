@@ -695,7 +695,11 @@ func repoIsDirty(repo *git.Repository) bool {
 	if repo.State == nil || repo.State.Branch == nil {
 		return false
 	}
-	return !repo.State.Branch.Clean
+	branch := repo.State.Branch
+	if branch.Clean {
+		return false
+	}
+	return branch.HasIncomingCommits()
 }
 
 func repoIsActionable(repo *git.Repository) bool {
