@@ -60,16 +60,18 @@ type WorkStatus struct {
 var (
 	// Available implies repo is ready for the operation
 	Available = WorkStatus{Status: 0, Ready: true}
+	// Pending indicates repo is waiting for an operation to start
+	Pending = WorkStatus{Status: 1, Ready: false}
 	// Queued means repo is queued for a operation
-	Queued = WorkStatus{Status: 1, Ready: false}
+	Queued = WorkStatus{Status: 2, Ready: false}
 	// Working means an operation is just started for this repository
-	Working = WorkStatus{Status: 2, Ready: false}
+	Working = WorkStatus{Status: 3, Ready: false}
 	// Paused is expected when a user interaction is required
-	Paused = WorkStatus{Status: 3, Ready: true}
+	Paused = WorkStatus{Status: 4, Ready: true}
 	// Success is the expected outcome of the operation
-	Success = WorkStatus{Status: 4, Ready: true}
+	Success = WorkStatus{Status: 5, Ready: true}
 	// Fail is the unexpected outcome of the operation
-	Fail = WorkStatus{Status: 5, Ready: false}
+	Fail = WorkStatus{Status: 6, Ready: false}
 )
 
 const (
@@ -132,7 +134,6 @@ func (r *Repository) loadComponents(reset bool) error {
 	if err := r.SyncRemoteAndBranch(r.State.Branch); err != nil {
 		return err
 	}
-
 	return r.loadStashedItems()
 }
 

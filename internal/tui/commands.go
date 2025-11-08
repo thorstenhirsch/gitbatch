@@ -2,12 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/load"
 )
 
@@ -40,31 +38,4 @@ func tickCmd() tea.Cmd {
 func isLazygitAvailable() bool {
 	_, err := exec.LookPath("lazygit")
 	return err == nil
-}
-
-// openLazygitCmd returns a command that opens lazygit for a repository
-func openLazygitCmd(r *git.Repository) tea.Cmd {
-	return func() tea.Msg {
-		if !isLazygitAvailable() {
-			return errMsg{err: fmt.Errorf("lazygit is not installed or not in PATH")}
-		}
-
-		// Create and run lazygit command
-		cmd := exec.Command("lazygit")
-		cmd.Dir = r.AbsPath
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		if err := cmd.Run(); err != nil {
-			return errMsg{err: fmt.Errorf("lazygit exited with error: %v", err)}
-		}
-
-		// Refresh repository state after lazygit exits
-		if err := r.ForceRefresh(); err != nil {
-			// Continue even if refresh fails
-		}
-
-		return lazygitClosedMsg{}
-	}
 }

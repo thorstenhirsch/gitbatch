@@ -14,7 +14,7 @@ func TestOverrideConfig(t *testing.T) {
 		LogLevel:    "info",
 		Depth:       1,
 		QuickMode:   false,
-		Mode:        "fetch",
+		Mode:        "pull",
 	}
 	config2 := &Config{
 		Directories: []string{string(os.PathSeparator) + "tmp"},
@@ -49,7 +49,7 @@ func TestExecQuickMode(t *testing.T) {
 	}
 	a := App{
 		Config: &Config{
-			Mode: "fetch",
+			Mode: "pull",
 		},
 	}
 	for _, test := range tests {

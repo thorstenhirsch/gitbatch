@@ -23,6 +23,14 @@ func TestStart(t *testing.T) {
 		JobType:    MergeJob,
 		Repository: th.Repository,
 	}
+	mockJob4 := &Job{
+		JobType:    RebaseJob,
+		Repository: th.Repository,
+	}
+	mockJob5 := &Job{
+		JobType:    PushJob,
+		Repository: th.Repository,
+	}
 
 	var tests = []struct {
 		input *Job
@@ -30,8 +38,13 @@ func TestStart(t *testing.T) {
 		{mockJob1},
 		{mockJob2},
 		{mockJob3},
+		{mockJob4},
+		{mockJob5},
 	}
 	for _, test := range tests {
+		if test.input.JobType == PushJob {
+			test.input.Repository.State.Remote = nil
+		}
 		err := test.input.start()
 		require.NoError(t, err)
 	}

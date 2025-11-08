@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thorstenhirsch/gitbatch/internal/command"
+	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/job"
 )
@@ -21,13 +23,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
-		return m, nil
+		return m, m.maybeStartInitialFetch(nil)
 
 	case repositoriesLoadedMsg:
+		repos := make([]*git.Repository, 0, len(msg.repos))
 		for _, repo := range msg.repos {
+			if repo == nil {
+				continue
+			}
+			repos = append(repos, repo)
 			m.addRepository(repo)
 		}
 		m.loading = false
+
+		if cmd := m.maybeStartInitialFetch(repos); cmd != nil {
+			return m, cmd
+		}
 		return m, nil
 
 	case lazygitClosedMsg:
@@ -35,23 +46,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case jobCompletedMsg:
-		// Check if any jobs are still running
-		stillRunning := false
-		for _, r := range m.repositories {
-			if r.WorkStatus() == git.Working {
-				stillRunning = true
-				break
-			}
-		}
-
-		if stillRunning {
-			// Jobs still running, send another tick
+		m.advanceSpinner()
+		if m.updateJobsRunningFlag() {
 			return m, tickCmd()
-		} else {
-			// All jobs completed
-			m.jobsRunning = false
-			return m, nil
 		}
+		return m, nil
+
+	case jobQueueResultMsg:
+		if len(msg.failures) > 0 {
+			m.processJobFailures(msg.failures)
+		}
+		if msg.resetMainQueue {
+			m.queue = job.CreateJobQueue()
+		}
+		if m.updateJobsRunningFlag() {
+			return m, tickCmd()
+		}
+		return m, nil
 
 	case repoActionResultMsg:
 		m.ensureSelectionWithinBounds(msg.panel)
@@ -60,13 +71,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.err = msg.err
 		return m, nil
+
+	case autoFetchFailedMsg:
+		m.jobsRunning = false
+		// Auto-fetch failures are recorded on the affected repositories and should
+		// not pollute the global status bar. Leave m.err untouched so the user only
+		// sees errors when focusing the specific repo.
+		return m, nil
 	}
 
 	return m, nil
 } // handleKeyPress processes keyboard input
 func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	if m.activeCredentialPrompt != nil {
+		handled, cmd := m.handleCredentialPromptKey(msg)
+		if handled {
+			return m, cmd
+		}
+	}
+
+	if m.activeForcePrompt != nil {
+		switch key {
+		case "y", "Y", "enter":
+			cmd := m.confirmForcePush()
+			return m, cmd
+		case "n", "N", "esc":
+			m.dismissForcePrompt()
+			return m, nil
+		default:
+			return m, nil
+		}
+	}
+
 	// Global keybindings
-	switch msg.String() {
+	switch key {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 
@@ -82,7 +122,11 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.currentView == FocusView {
 			m.currentView = OverviewView
 			m.sidePanel = NonePanel
+			m.clearSuccessFormatting()
 			return m, nil
+		}
+		if m.currentView == OverviewView {
+			m.clearSuccessFormatting()
 		}
 		return m, nil
 
@@ -107,47 +151,353 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// View-specific keybindings
-	if m.currentView == OverviewView {
+	switch m.currentView {
+	case OverviewView:
 		return m.handleOverviewKeys(msg)
-	} else if m.currentView == FocusView {
+	case FocusView:
 		return m.handleFocusKeys(msg)
 	}
 
 	return m, nil
 }
 
+func (m *Model) handleCredentialPromptKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+	if m.activeCredentialPrompt == nil {
+		return false, nil
+	}
+
+	key := msg.String()
+	switch key {
+	case "ctrl+c":
+		return true, tea.Quit
+	case "esc":
+		m.cancelCredentialPrompt()
+		return true, nil
+	case "enter":
+		cmd := m.submitCredentialInput()
+		return true, cmd
+	case "tab", "shift+tab":
+		return true, nil
+	case "backspace", "ctrl+h":
+		m.backspaceCredentialInput()
+		return true, nil
+	case " ":
+		m.credentialInputBuffer += " "
+		return true, nil
+	default:
+		if len(msg.Runes) > 0 {
+			m.credentialInputBuffer += string(msg.Runes)
+		}
+		return true, nil
+	}
+}
+
+func (m *Model) backspaceCredentialInput() {
+	if m.credentialInputBuffer == "" {
+		return
+	}
+	runes := []rune(m.credentialInputBuffer)
+	if len(runes) == 0 {
+		return
+	}
+	m.credentialInputBuffer = string(runes[:len(runes)-1])
+}
+
+func (m *Model) toggleCredentialField() {
+	if m.activeCredentialPrompt == nil {
+		return
+	}
+	if m.credentialInputField == credentialFieldUsername {
+		m.activeCredentialPrompt.username = strings.TrimSpace(m.credentialInputBuffer)
+		m.credentialInputField = credentialFieldPassword
+		m.credentialInputBuffer = m.activeCredentialPrompt.password
+		return
+	}
+	m.activeCredentialPrompt.password = m.credentialInputBuffer
+	m.credentialInputField = credentialFieldUsername
+	m.credentialInputBuffer = m.activeCredentialPrompt.username
+}
+
+func (m *Model) submitCredentialInput() tea.Cmd {
+	prompt := m.activeCredentialPrompt
+	if prompt == nil {
+		return nil
+	}
+	switch m.credentialInputField {
+	case credentialFieldUsername:
+		prompt.username = strings.TrimSpace(m.credentialInputBuffer)
+		m.credentialInputField = credentialFieldPassword
+		m.credentialInputBuffer = prompt.password
+		return nil
+	case credentialFieldPassword:
+		prompt.password = m.credentialInputBuffer
+		cmd := m.retryCredentialPrompt(prompt)
+		m.dismissCredentialPrompt()
+		return cmd
+	default:
+		return nil
+	}
+}
+
+func (m *Model) cancelCredentialPrompt() {
+	if m.activeCredentialPrompt != nil && m.activeCredentialPrompt.repo != nil {
+		m.activeCredentialPrompt.repo.SetWorkStatus(git.Fail)
+		if m.activeCredentialPrompt.repo.State != nil {
+			m.activeCredentialPrompt.repo.State.Message = "credentials prompt dismissed"
+		}
+	}
+	m.dismissCredentialPrompt()
+}
+
+func (m *Model) dismissCredentialPrompt() {
+	m.activeCredentialPrompt = nil
+	m.credentialInputBuffer = ""
+	m.credentialInputField = credentialFieldUsername
+	m.advanceCredentialPrompt()
+}
+
+func (m *Model) advanceCredentialPrompt() {
+	if len(m.credentialPromptQueue) == 0 {
+		m.activeCredentialPrompt = nil
+		m.credentialInputBuffer = ""
+		m.credentialInputField = credentialFieldUsername
+		return
+	}
+	next := m.credentialPromptQueue[0]
+	m.credentialPromptQueue = m.credentialPromptQueue[1:]
+	m.activeCredentialPrompt = next
+	m.credentialInputField = credentialFieldUsername
+	if next != nil {
+		m.credentialInputBuffer = next.username
+	} else {
+		m.credentialInputBuffer = ""
+	}
+}
+
+func (m *Model) enqueueCredentialPrompt(j *job.Job) {
+	if j == nil || j.Repository == nil {
+		return
+	}
+
+	if m.activeCredentialPrompt != nil && m.activeCredentialPrompt.repo != nil && m.activeCredentialPrompt.repo.RepoID == j.Repository.RepoID {
+		m.activeCredentialPrompt.job = j
+		if creds := credentialsFromJob(j); creds != nil {
+			m.activeCredentialPrompt.username = creds.User
+			if m.credentialInputField == credentialFieldUsername {
+				m.credentialInputBuffer = creds.User
+			}
+		}
+		return
+	}
+
+	for _, pending := range m.credentialPromptQueue {
+		if pending == nil || pending.repo == nil {
+			continue
+		}
+		if pending.repo.RepoID == j.Repository.RepoID {
+			pending.job = j
+			if creds := credentialsFromJob(j); creds != nil {
+				pending.username = creds.User
+			}
+			return
+		}
+	}
+
+	prompt := &credentialPrompt{
+		repo: j.Repository,
+		job:  j,
+	}
+	if creds := credentialsFromJob(j); creds != nil {
+		prompt.username = creds.User
+	}
+	m.credentialPromptQueue = append(m.credentialPromptQueue, prompt)
+	if m.activeCredentialPrompt == nil {
+		m.advanceCredentialPrompt()
+	}
+}
+
+func (m *Model) retryCredentialPrompt(prompt *credentialPrompt) tea.Cmd {
+	if prompt == nil || prompt.repo == nil || prompt.job == nil {
+		return nil
+	}
+	repo := prompt.repo
+	repo.SetWorkStatus(git.Pending)
+	if repo.State != nil {
+		repo.State.Message = "retrying with credentials"
+	}
+	creds := &git.Credentials{
+		User:     strings.TrimSpace(prompt.username),
+		Password: prompt.password,
+	}
+	retryJob := cloneJobWithCredentials(prompt.job, creds)
+	if retryJob == nil {
+		repo.SetWorkStatus(git.Fail)
+		if repo.State != nil {
+			repo.State.Message = "unable to retry with credentials"
+		}
+		return nil
+	}
+	retryJob.Repository = repo
+	queue := job.CreateJobQueue()
+	if err := queue.AddJob(retryJob); err != nil {
+		repo.SetWorkStatus(git.Fail)
+		if repo.State != nil {
+			repo.State.Message = "failed to queue credential retry"
+		}
+		return func() tea.Msg { return errMsg{err: err} }
+	}
+	repo.SetWorkStatus(git.Queued)
+	m.jobsRunning = true
+	return tea.Batch(runJobQueueCmd(queue, false), tickCmd())
+}
+
+func cloneJobWithCredentials(original *job.Job, creds *git.Credentials) *job.Job {
+	if original == nil {
+		return nil
+	}
+	clone := &job.Job{
+		JobType:    original.JobType,
+		Repository: original.Repository,
+	}
+
+	switch original.JobType {
+	case job.FetchJob:
+		var opts *command.FetchOptions
+		switch cfg := original.Options.(type) {
+		case *command.FetchOptions:
+			copyCfg := *cfg
+			copyCfg.Credentials = creds
+			if copyCfg.CommandMode == 0 {
+				copyCfg.CommandMode = command.ModeLegacy
+			}
+			if copyCfg.Timeout <= 0 {
+				copyCfg.Timeout = command.DefaultFetchTimeout
+			}
+			opts = &copyCfg
+		case command.FetchOptions:
+			copyCfg := cfg
+			copyCfg.Credentials = creds
+			if copyCfg.CommandMode == 0 {
+				copyCfg.CommandMode = command.ModeLegacy
+			}
+			if copyCfg.Timeout <= 0 {
+				copyCfg.Timeout = command.DefaultFetchTimeout
+			}
+			opts = &copyCfg
+		default:
+			opts = &command.FetchOptions{
+				RemoteName:  defaultRemoteName(original.Repository),
+				CommandMode: command.ModeLegacy,
+				Timeout:     command.DefaultFetchTimeout,
+				Credentials: creds,
+			}
+		}
+		clone.Options = opts
+	case job.PullJob, job.RebaseJob:
+		switch cfg := original.Options.(type) {
+		case *command.PullOptions:
+			copyCfg := *cfg
+			copyCfg.Credentials = creds
+			clone.Options = &copyCfg
+		case command.PullOptions:
+			copyCfg := cfg
+			copyCfg.Credentials = creds
+			clone.Options = &copyCfg
+		case *job.PullJobConfig:
+			copyCfg := *cfg
+			if copyCfg.Options != nil {
+				optsCopy := *copyCfg.Options
+				optsCopy.Credentials = creds
+				copyCfg.Options = &optsCopy
+			} else {
+				copyCfg.Options = &command.PullOptions{Credentials: creds}
+			}
+			clone.Options = &copyCfg
+		case job.PullJobConfig:
+			copyCfg := cfg
+			if copyCfg.Options != nil {
+				optsCopy := *copyCfg.Options
+				optsCopy.Credentials = creds
+				copyCfg.Options = &optsCopy
+			} else {
+				copyCfg.Options = &command.PullOptions{Credentials: creds}
+			}
+			clone.Options = &copyCfg
+		default:
+			clone.Options = &command.PullOptions{Credentials: creds}
+		}
+	default:
+		return nil
+	}
+
+	return clone
+}
+
+func credentialsFromJob(j *job.Job) *git.Credentials {
+	if j == nil {
+		return nil
+	}
+	switch cfg := j.Options.(type) {
+	case *command.FetchOptions:
+		return cfg.Credentials
+	case command.FetchOptions:
+		return cfg.Credentials
+	case *command.PullOptions:
+		return cfg.Credentials
+	case command.PullOptions:
+		return cfg.Credentials
+	case *job.PullJobConfig:
+		if cfg.Options != nil {
+			return cfg.Options.Credentials
+		}
+	case job.PullJobConfig:
+		if cfg.Options != nil {
+			return cfg.Options.Credentials
+		}
+	}
+	return nil
+}
+
 // handleOverviewKeys processes keys in overview mode
 func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		} else {
-			m.cursor = len(m.repositories) - 1
+		if len(m.repositories) == 0 {
+			return m, nil
 		}
+		m.cursor = (m.cursor - 1 + len(m.repositories)) % len(m.repositories)
+		m.cursor = m.findNextReadyIndex(m.cursor, -1)
+		m.resetCommitScrollForSelected()
+		return m, nil
 
 	case "down", "j":
-		if m.cursor < len(m.repositories)-1 {
-			m.cursor++
-		} else {
-			m.cursor = 0
+		if len(m.repositories) == 0 {
+			return m, nil
 		}
+		m.cursor = (m.cursor + 1) % len(m.repositories)
+		m.cursor = m.findNextReadyIndex(m.cursor, 1)
+		m.resetCommitScrollForSelected()
+		return m, nil
 
 	case "g": // First g of gg - we need to check if it's followed by another g
 		// For now, just go to top (single g also works)
 		m.cursor = 0
+		m.resetCommitScrollForSelected()
 
 	case "G": // Shift+G goes to end
 		if len(m.repositories) > 0 {
 			m.cursor = len(m.repositories) - 1
+			m.resetCommitScrollForSelected()
 		}
 
 	case "home":
 		m.cursor = 0
+		m.resetCommitScrollForSelected()
 
 	case "end":
 		if len(m.repositories) > 0 {
 			m.cursor = len(m.repositories) - 1
+			m.resetCommitScrollForSelected()
 		}
 
 	case "ctrl+f", "pgdown": // Ctrl+F and Page Down - scroll forward (down)
@@ -156,6 +506,8 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.repositories) {
 			m.cursor = len(m.repositories) - 1
 		}
+		m.cursor = m.findNextReadyIndex(m.cursor, 1)
+		m.resetCommitScrollForSelected()
 
 	case "ctrl+b", "pgup": // Ctrl+B and Page Up - scroll backward (up)
 		pageSize := m.height - 5
@@ -163,6 +515,8 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < 0 {
 			m.cursor = 0
 		}
+		m.cursor = m.findNextReadyIndex(m.cursor, -1)
+		m.resetCommitScrollForSelected()
 
 	case "ctrl+d": // Ctrl+D - scroll down half page
 		halfPage := (m.height - 5) / 2
@@ -170,12 +524,26 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.repositories) {
 			m.cursor = len(m.repositories) - 1
 		}
+		m.cursor = m.findNextReadyIndex(m.cursor, 1)
+		m.resetCommitScrollForSelected()
 
 	case "ctrl+u": // Ctrl+U - scroll up half page
 		halfPage := (m.height - 5) / 2
 		m.cursor -= halfPage
 		if m.cursor < 0 {
 			m.cursor = 0
+		}
+		m.cursor = m.findNextReadyIndex(m.cursor, -1)
+		m.resetCommitScrollForSelected()
+
+	case "right", "l":
+		if m.adjustCommitScroll(1) {
+			return m, nil
+		}
+
+	case "left", "h":
+		if m.adjustCommitScroll(-1) {
+			return m, nil
 		}
 
 	case " ", "space":
@@ -190,6 +558,27 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m, m.startQueue()
 
+	case "f":
+		repo := m.currentRepository()
+		if repo == nil || !repoIsActionable(repo) {
+			return m, nil
+		}
+		return m, m.runFetchForRepo(repo)
+
+	case "p":
+		repo := m.currentRepository()
+		if repo == nil || !repoIsActionable(repo) {
+			return m, nil
+		}
+		return m, m.runPullForRepo(repo, true)
+
+	case "P":
+		repo := m.currentRepository()
+		if repo == nil || !repoIsActionable(repo) {
+			return m, nil
+		}
+		return m, m.runPushForRepo(repo, false, true, "push queued")
+
 	case "m":
 		m.cycleMode()
 
@@ -197,6 +586,17 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activatePanel(BranchPanel)
 
 	case "c":
+		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
+			repo := m.repositories[m.cursor]
+			if repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail && repo.State.Message != "" {
+				repo.State.Message = ""
+				return m, nil
+			}
+		}
+		if m.err != nil {
+			m.err = nil
+			return m, nil
+		}
 		if m.hasMultipleTagged() {
 			m.notifyMultiSelectionRestriction("Commit view unavailable for tagged selection")
 			return m, nil
@@ -274,6 +674,70 @@ func (m *Model) addRepository(r *git.Repository) {
 	m.repositories = rs
 }
 
+func (m *Model) currentRepository() *git.Repository {
+	if len(m.repositories) == 0 {
+		return nil
+	}
+	if m.cursor < 0 || m.cursor >= len(m.repositories) {
+		return nil
+	}
+	return m.repositories[m.cursor]
+}
+
+func repoHasActiveJob(status git.WorkStatus) bool {
+	return status == git.Pending || status == git.Queued || status == git.Working
+}
+
+func repoIsDirty(repo *git.Repository) bool {
+	if repo == nil {
+		return false
+	}
+	if repo.State == nil || repo.State.Branch == nil {
+		return false
+	}
+	return !repo.State.Branch.Clean
+}
+
+func repoIsActionable(repo *git.Repository) bool {
+	if repo == nil {
+		return false
+	}
+	status := repo.WorkStatus()
+	if status == git.Fail {
+		if repo.State != nil && repo.State.Message == "" {
+			// allow retry while preserving fail visualization
+		} else {
+			return false
+		}
+	} else if !status.Ready {
+		return false
+	}
+	if repo.State == nil || repo.State.Branch == nil {
+		return false
+	}
+	return repo.State.Branch.Clean
+}
+
+func (m *Model) processJobFailures(fails map[*job.Job]error) {
+	for j, err := range fails {
+		if err == nil {
+			continue
+		}
+		if err == gerr.ErrAuthenticationRequired || err == gerr.ErrAuthorizationFailed {
+			j.Repository.SetWorkStatus(git.Paused)
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "credentials required"
+			}
+			m.enqueueCredentialPrompt(j)
+			continue
+		}
+		if j.JobType == job.PushJob {
+			j.Repository.SetWorkStatus(git.Fail)
+			m.enqueueForcePrompt(j.Repository)
+		}
+	}
+}
+
 // toggleQueue adds/removes repository from queue
 func (m *Model) toggleQueue() tea.Cmd {
 	if len(m.repositories) == 0 {
@@ -281,46 +745,75 @@ func (m *Model) toggleQueue() tea.Cmd {
 	}
 
 	r := m.repositories[m.cursor]
-
-	if r.WorkStatus().Ready {
-		return func() tea.Msg {
-			m.addToQueue(r)
-			return jobCompletedMsg{}
-		}
-	} else if r.WorkStatus() == git.Queued {
+	if r == nil {
+		return nil
+	}
+	switch r.WorkStatus() {
+	case git.Queued:
 		return func() tea.Msg {
 			m.removeFromQueue(r)
 			return jobCompletedMsg{}
 		}
 	}
 
-	return nil
+	if !repoIsActionable(r) {
+		return nil
+	}
+
+	return func() tea.Msg {
+		m.addToQueue(r)
+		return jobCompletedMsg{}
+	}
 }
 
 // addToQueue adds a repository to the job queue
 func (m *Model) addToQueue(r *git.Repository) error {
+	if !repoIsActionable(r) {
+		return nil
+	}
+
 	j := &job.Job{
 		Repository: r,
 	}
 
 	switch m.mode.ID {
-	case FetchMode:
-		j.JobType = job.FetchJob
 	case PullMode:
 		if r.State.Branch.Upstream == nil {
 			return nil
 		}
+		if r.State.Remote == nil {
+			return nil
+		}
 		j.JobType = job.PullJob
+		j.Options = &command.PullOptions{
+			RemoteName:  r.State.Remote.Name,
+			CommandMode: command.ModeLegacy,
+			FFOnly:      true,
+		}
 	case MergeMode:
 		if r.State.Branch.Upstream == nil {
 			return nil
 		}
 		j.JobType = job.MergeJob
-	case CheckoutMode:
-		j.JobType = job.CheckoutJob
-		j.Options = &command.CheckoutOptions{
-			TargetRef:      m.targetBranch,
-			CreateIfAbsent: true,
+	case RebaseMode:
+		if r.State.Branch.Upstream == nil || r.State.Remote == nil {
+			return nil
+		}
+		j.JobType = job.RebaseJob
+		j.Options = &command.PullOptions{
+			RemoteName:  r.State.Remote.Name,
+			CommandMode: command.ModeLegacy,
+			Rebase:      true,
+		}
+	case PushMode:
+		if r.State.Remote == nil || r.State.Branch == nil {
+			return nil
+		}
+		j.JobType = job.PushJob
+		j.Options = &command.PushOptions{
+			RemoteName:    r.State.Remote.Name,
+			ReferenceName: r.State.Branch.Name,
+			CommandMode:   command.ModeLegacy,
 		}
 	default:
 		return nil
@@ -343,11 +836,166 @@ func (m *Model) removeFromQueue(r *git.Repository) error {
 	return nil
 }
 
+func (m *Model) runFetchForRepo(repo *git.Repository) tea.Cmd {
+	if repo == nil {
+		return nil
+	}
+	if !repoIsActionable(repo) {
+		return nil
+	}
+	if repoHasActiveJob(repo.WorkStatus()) {
+		return nil
+	}
+	return m.startFetchForRepos([]*git.Repository{repo})
+}
+
+func (m *Model) runPullForRepo(repo *git.Repository, suppressSuccess bool) tea.Cmd {
+	if repo == nil || repo.State == nil || repo.State.Branch == nil {
+		return nil
+	}
+	if !repoIsActionable(repo) {
+		return nil
+	}
+	if repoHasActiveJob(repo.WorkStatus()) {
+		return nil
+	}
+	if repo.State.Branch.Upstream == nil {
+		repo.State.Message = "upstream not set"
+		return nil
+	}
+	if repo.State.Remote == nil {
+		repo.State.Message = "remote not set"
+		return nil
+	}
+	repo.State.Message = "pull queued"
+	repo.SetWorkStatus(git.Pending)
+	pullCfg := &job.PullJobConfig{
+		Options: &command.PullOptions{
+			RemoteName:  repo.State.Remote.Name,
+			CommandMode: command.ModeLegacy,
+			FFOnly:      true,
+		},
+		SuppressSuccess: suppressSuccess,
+	}
+	jobQueue := job.CreateJobQueue()
+	jobEntry := &job.Job{
+		Repository: repo,
+		JobType:    job.PullJob,
+		Options:    pullCfg,
+	}
+	if err := jobQueue.AddJob(jobEntry); err != nil {
+		repo.SetWorkStatus(git.Available)
+		return func() tea.Msg { return errMsg{err: err} }
+	}
+	repo.SetWorkStatus(git.Queued)
+	m.jobsRunning = true
+	return tea.Batch(runJobQueueCmd(jobQueue, false), tickCmd())
+}
+
+func (m *Model) runPushForRepo(repo *git.Repository, force bool, suppressSuccess bool, message string) tea.Cmd {
+	if repo == nil || repo.State == nil || repo.State.Branch == nil {
+		return nil
+	}
+	if repoHasActiveJob(repo.WorkStatus()) {
+		return nil
+	}
+	if !repoIsActionable(repo) {
+		return nil
+	}
+	if repo.State.Remote == nil {
+		repo.State.Message = "remote not set"
+		return nil
+	}
+	if repo.State.Branch.Name == "" {
+		repo.State.Message = "branch not set"
+		return nil
+	}
+	if message == "" {
+		if force {
+			message = "force push queued"
+		} else {
+			message = "push queued"
+		}
+	}
+	repo.State.Message = message
+	repo.SetWorkStatus(git.Pending)
+	pushCfg := &job.PushJobConfig{
+		Options: &command.PushOptions{
+			RemoteName:    repo.State.Remote.Name,
+			ReferenceName: repo.State.Branch.Name,
+			CommandMode:   command.ModeLegacy,
+			Force:         force,
+		},
+		SuppressSuccess: suppressSuccess,
+	}
+	jobQueue := job.CreateJobQueue()
+	jobEntry := &job.Job{
+		Repository: repo,
+		JobType:    job.PushJob,
+		Options:    pushCfg,
+	}
+	if err := jobQueue.AddJob(jobEntry); err != nil {
+		repo.SetWorkStatus(git.Available)
+		return func() tea.Msg { return errMsg{err: err} }
+	}
+	repo.SetWorkStatus(git.Queued)
+	m.jobsRunning = true
+	return tea.Batch(runJobQueueCmd(jobQueue, false), tickCmd())
+}
+
+func (m *Model) enqueueForcePrompt(repo *git.Repository) {
+	if repo == nil {
+		return
+	}
+	if m.activeForcePrompt != nil && m.activeForcePrompt.repo.RepoID == repo.RepoID {
+		return
+	}
+	for _, pending := range m.forcePromptQueue {
+		if pending == nil {
+			continue
+		}
+		if pending.repo != nil && pending.repo.RepoID == repo.RepoID {
+			return
+		}
+	}
+	m.forcePromptQueue = append(m.forcePromptQueue, &forcePushPrompt{repo: repo})
+	if m.activeForcePrompt == nil {
+		m.advanceForcePrompt()
+	}
+}
+
+func (m *Model) advanceForcePrompt() {
+	if len(m.forcePromptQueue) == 0 {
+		m.activeForcePrompt = nil
+		return
+	}
+	m.activeForcePrompt = m.forcePromptQueue[0]
+	m.forcePromptQueue = m.forcePromptQueue[1:]
+}
+
+func (m *Model) dismissForcePrompt() {
+	m.activeForcePrompt = nil
+	m.advanceForcePrompt()
+}
+
+func (m *Model) confirmForcePush() tea.Cmd {
+	if m.activeForcePrompt == nil {
+		return nil
+	}
+	repo := m.activeForcePrompt.repo
+	// Move to next prompt regardless of outcome
+	m.dismissForcePrompt()
+	if repo == nil {
+		return nil
+	}
+	return m.runPushForRepo(repo, true, true, "retrying push with --force")
+}
+
 // queueAll adds all available repositories to the queue
 func (m *Model) queueAll() tea.Cmd {
 	return func() tea.Msg {
 		for _, r := range m.repositories {
-			if r.WorkStatus().Ready {
+			if repoIsActionable(r) {
 				m.addToQueue(r)
 			}
 		}
@@ -370,22 +1018,516 @@ func (m *Model) unqueueAll() tea.Cmd {
 // startQueue starts processing the job queue
 func (m *Model) startQueue() tea.Cmd {
 	m.jobsRunning = true
+	currentQueue := m.queue
+	return tea.Batch(runJobQueueCmd(currentQueue, true), tickCmd())
+}
 
-	// Start jobs in a goroutine
-	go func() {
-		fails := m.queue.StartJobsAsync()
-		m.queue = job.CreateJobQueue()
-		for j, err := range fails {
-			// Handle authentication failures
-			if err != nil {
-				j.Repository.SetWorkStatus(git.Paused)
-				_ = m.failoverQueue.AddJob(j)
+func (m *Model) startFetchForRepos(repos []*git.Repository) tea.Cmd {
+	if len(repos) == 0 {
+		return nil
+	}
+
+	eligible := make([]*git.Repository, 0, len(repos))
+	seen := make(map[string]struct{}, len(repos))
+	for _, repo := range repos {
+		if repo == nil {
+			continue
+		}
+		if _, ok := seen[repo.RepoID]; ok {
+			continue
+		}
+		seen[repo.RepoID] = struct{}{}
+		if !repoIsActionable(repo) {
+			continue
+		}
+		status := repo.WorkStatus()
+		if status == git.Working || status == git.Queued || status == git.Pending {
+			continue
+		}
+		if repo.State == nil || repo.State.Remote == nil {
+			if repo.State != nil && repo.State.Message == "" {
+				repo.State.Message = "no remote configured"
+			}
+			continue
+		}
+		repo.State.Message = ""
+		repo.SetWorkStatus(git.Pending)
+		eligible = append(eligible, repo)
+	}
+
+	if len(eligible) == 0 {
+		return nil
+	}
+
+	m.jobsRunning = true
+	return tea.Batch(fetchRepositoriesCmd(eligible), tickCmd())
+}
+
+func (m *Model) maybeStartInitialFetch(repos []*git.Repository) tea.Cmd {
+	if m.initialFetchStarted || m.loading || m.terminalTooSmall() {
+		return nil
+	}
+
+	reposToUse := repos
+	if reposToUse == nil {
+		reposToUse = m.repositories
+	}
+	if len(reposToUse) == 0 {
+		return nil
+	}
+
+	cmd := m.startFetchForRepos(reposToUse)
+	m.initialFetchStarted = true
+	return cmd
+}
+
+func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
+	return func() tea.Msg {
+		queue := job.CreateJobQueue()
+		failures := make([]string, 0)
+		for _, repo := range repos {
+			opts := &command.FetchOptions{
+				RemoteName:  defaultRemoteName(repo),
+				CommandMode: command.ModeLegacy,
+				Timeout:     command.DefaultFetchTimeout,
+			}
+			if err := queue.AddJob(&job.Job{
+				JobType:    job.FetchJob,
+				Repository: repo,
+				Options:    opts,
+			}); err != nil {
+				repo.SetWorkStatus(git.Fail)
+				if repo.State != nil {
+					repo.State.Message = err.Error()
+					if repo.State.Branch != nil {
+						repo.State.Branch.Clean = false
+					}
+				}
+				failures = append(failures, repo.Name)
+				continue
 			}
 		}
-	}()
 
-	// Start the tick command to refresh the UI periodically
-	return tickCmd()
+		fails := queue.StartJobsAsync()
+		for j := range fails {
+			if j == nil || j.Repository == nil {
+				continue
+			}
+			failures = append(failures, j.Repository.Name)
+		}
+		if len(failures) > 0 {
+			sort.Strings(failures)
+			return autoFetchFailedMsg{names: failures}
+		}
+
+		return jobCompletedMsg{}
+	}
+}
+
+func defaultRemoteName(repo *git.Repository) string {
+	if repo != nil && repo.State.Remote != nil && repo.State.Remote.Name != "" {
+		return repo.State.Remote.Name
+	}
+	return "origin"
+}
+
+func (m *Model) advanceSpinner() {
+	if len(spinnerFrames) == 0 {
+		return
+	}
+	m.spinnerIndex = (m.spinnerIndex + 1) % len(spinnerFrames)
+}
+
+func (m *Model) updateJobsRunningFlag() bool {
+	for _, r := range m.repositories {
+		status := r.WorkStatus()
+		if status == git.Working || status == git.Pending {
+			m.jobsRunning = true
+			return true
+		}
+	}
+	m.jobsRunning = false
+	return false
+}
+
+func (m *Model) findNextReadyIndex(start int, direction int) int {
+	count := len(m.repositories)
+	if count == 0 {
+		return 0
+	}
+	index := start
+	for i := 0; i < count; i++ {
+		// Normalize index to remain inside bounds
+		if index < 0 {
+			index = count - 1
+		}
+		if index >= count {
+			index = 0
+		}
+		repo := m.repositories[index]
+		if repo != nil {
+			status := repo.WorkStatus()
+			if status == git.Queued || status.Ready || repoIsDirty(repo) {
+				return index
+			}
+		}
+		index += direction
+	}
+	// No ready repositories, keep original index but clamp to within range
+	if start < 0 {
+		return 0
+	}
+	if start >= count {
+		return count - 1
+	}
+	return start
+}
+
+func (m *Model) getCommitScrollOffset(repo *git.Repository) int {
+	if repo == nil || repo.RepoID == "" {
+		return 0
+	}
+	if m.commitScrollOffsets == nil {
+		m.commitScrollOffsets = make(map[string]int)
+	}
+	return m.commitScrollOffsets[repo.RepoID]
+}
+
+func (m *Model) setCommitScrollOffset(repo *git.Repository, offset int) {
+	if repo == nil || repo.RepoID == "" {
+		return
+	}
+	if m.commitScrollOffsets == nil {
+		m.commitScrollOffsets = make(map[string]int)
+	}
+	if offset <= 0 {
+		delete(m.commitScrollOffsets, repo.RepoID)
+		return
+	}
+	m.commitScrollOffsets[repo.RepoID] = offset
+}
+
+func (m *Model) resetCommitScrollForSelected() {
+	repo := m.currentRepository()
+	if repo == nil {
+		m.clearStaleGlobalError(nil)
+		return
+	}
+	if m.commitScrollOffsets != nil {
+		delete(m.commitScrollOffsets, repo.RepoID)
+	}
+	m.clearStaleGlobalError(repo)
+}
+
+func (m *Model) clearStaleGlobalError(repo *git.Repository) {
+	if m.err == nil {
+		return
+	}
+	if repo == nil || repo.WorkStatus() != git.Fail {
+		m.err = nil
+	}
+}
+
+func (m *Model) adjustCommitScroll(delta int) bool {
+	if delta == 0 {
+		return false
+	}
+	repo := m.currentRepository()
+	if repo == nil {
+		return false
+	}
+	colWidths := calculateColumnWidths(m.width, m.repositories)
+	contentWidth := colWidths.commitMsg - 1
+	if contentWidth <= 0 {
+		return false
+	}
+	content := commitContentForRepo(repo)
+	maxOffset := maxCommitOffset(content, contentWidth)
+	if maxOffset <= 0 {
+		if m.getCommitScrollOffset(repo) != 0 {
+			m.setCommitScrollOffset(repo, 0)
+			return true
+		}
+		return false
+	}
+	offset := m.getCommitScrollOffset(repo)
+	offset += delta
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset == m.getCommitScrollOffset(repo) {
+		return false
+	}
+	m.setCommitScrollOffset(repo, offset)
+	return true
+}
+
+func (m *Model) repoKey(repo *git.Repository) string {
+	if repo == nil {
+		return ""
+	}
+	if repo.RepoID != "" {
+		return repo.RepoID
+	}
+	if repo.AbsPath != "" {
+		return repo.AbsPath
+	}
+	return repo.Name
+}
+
+func (m *Model) commitDetailKey(repo *git.Repository, commit *git.Commit, index int) string {
+	key := m.repoKey(repo)
+	if key == "" {
+		return ""
+	}
+	if commit != nil && commit.Hash != "" {
+		return key + ":" + commit.Hash
+	}
+	return fmt.Sprintf("%s:idx:%d", key, index)
+}
+
+func (m *Model) getCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int) int {
+	if m.commitDetailScroll == nil {
+		return 0
+	}
+	key := m.commitDetailKey(repo, commit, index)
+	if key == "" {
+		return 0
+	}
+	return m.commitDetailScroll[key]
+}
+
+func (m *Model) setCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int, offset int) {
+	key := m.commitDetailKey(repo, commit, index)
+	if key == "" {
+		return
+	}
+	if offset <= 0 {
+		if m.commitDetailScroll != nil {
+			delete(m.commitDetailScroll, key)
+		}
+		return
+	}
+	if m.commitDetailScroll == nil {
+		m.commitDetailScroll = make(map[string]int)
+	}
+	m.commitDetailScroll[key] = offset
+}
+
+func (m *Model) resetCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int) {
+	if m.commitDetailScroll == nil {
+		return
+	}
+	key := m.commitDetailKey(repo, commit, index)
+	if key == "" {
+		return
+	}
+	delete(m.commitDetailScroll, key)
+}
+
+func (m *Model) resetAllCommitDetailScroll(repo *git.Repository) {
+	if repo == nil || m.commitDetailScroll == nil {
+		return
+	}
+	prefix := m.repoKey(repo)
+	if prefix == "" {
+		return
+	}
+	prefix += ":"
+	for key := range m.commitDetailScroll {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.commitDetailScroll, key)
+		}
+	}
+}
+
+func (m *Model) commitPanelContentWidth() int {
+	repo := m.currentRepository()
+	panelWidth, _, ok := m.sidePanelLayoutDimensions(repo)
+	if panelWidth < panelHorizontalFrame+1 || !ok {
+		panelWidth = m.sidePanelMaxWidth()
+	}
+	contentWidth := panelWidth - panelHorizontalFrame
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	return contentWidth
+}
+
+func (m *Model) adjustCommitDetailScroll(delta int) bool {
+	if delta == 0 {
+		return false
+	}
+	repo := m.currentRepository()
+	if repo == nil || repo.State == nil || repo.State.Branch == nil {
+		return false
+	}
+	commits := repo.State.Branch.Commits
+	if len(commits) == 0 {
+		return false
+	}
+	index := clampIndex(m.commitCursor, len(commits))
+	if index < 0 || index >= len(commits) {
+		return false
+	}
+	commit := commits[index]
+	content := commitPanelLineContent(commit)
+	width := m.commitPanelContentWidth()
+	if width <= 0 {
+		return false
+	}
+	maxOffset := maxCommitOffset(content, width)
+	if maxOffset <= 0 {
+		if current := m.getCommitDetailOffset(repo, commit, index); current != 0 {
+			m.resetCommitDetailOffset(repo, commit, index)
+			return true
+		}
+		return false
+	}
+	offset := m.getCommitDetailOffset(repo, commit, index)
+	offset += delta
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset == m.getCommitDetailOffset(repo, commit, index) {
+		return false
+	}
+	m.setCommitDetailOffset(repo, commit, index, offset)
+	return true
+}
+
+func (m *Model) resetCommitDetailScrollForIndex(repo *git.Repository, commits []*git.Commit, index int) {
+	if repo == nil || len(commits) == 0 {
+		return
+	}
+	if index < 0 || index >= len(commits) {
+		return
+	}
+	m.resetCommitDetailOffset(repo, commits[index], index)
+}
+
+func (m *Model) panelLineBudget() int {
+	budget := m.overviewTableBodyHeight() - 3
+	if budget < 0 {
+		budget = 0
+	}
+	return budget
+}
+
+func (m *Model) panelViewportSize(total int) int {
+	budget := m.panelLineBudget()
+	if budget <= 0 {
+		return 0
+	}
+	// reserve one line for instructions
+	remaining := budget - 1
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining > 1 && total > 0 {
+		remaining--
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	if remaining > total {
+		remaining = total
+	}
+	return remaining
+}
+
+func (m *Model) commitViewportSize(total int) int {
+	return m.panelViewportSize(total)
+}
+
+func (m *Model) branchViewportSize(total int) int {
+	return m.panelViewportSize(total)
+}
+
+func (m *Model) ensureBranchCursorVisible(total, viewport int) {
+	if total <= 0 {
+		m.branchCursor = 0
+		m.branchOffset = 0
+		return
+	}
+	if m.branchCursor < 0 {
+		m.branchCursor = 0
+	}
+	if m.branchCursor >= total {
+		m.branchCursor = total - 1
+	}
+	if viewport <= 0 {
+		m.branchOffset = 0
+		return
+	}
+	if m.branchOffset < 0 {
+		m.branchOffset = 0
+	}
+	maxOffset := total - viewport
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.branchOffset > maxOffset {
+		m.branchOffset = maxOffset
+	}
+	if m.branchCursor < m.branchOffset {
+		m.branchOffset = m.branchCursor
+	} else if m.branchCursor >= m.branchOffset+viewport {
+		m.branchOffset = m.branchCursor - viewport + 1
+	}
+}
+
+func (m *Model) remoteViewportSize(total int) int {
+	return m.panelViewportSize(total)
+}
+
+func (m *Model) ensureRemoteCursorVisible(total, viewport int) {
+	if total <= 0 {
+		m.remoteBranchCursor = 0
+		m.remoteOffset = 0
+		return
+	}
+	if m.remoteBranchCursor < 0 {
+		m.remoteBranchCursor = 0
+	}
+	if m.remoteBranchCursor >= total {
+		m.remoteBranchCursor = total - 1
+	}
+	if viewport <= 0 {
+		m.remoteOffset = 0
+		return
+	}
+	if m.remoteOffset < 0 {
+		m.remoteOffset = 0
+	}
+	maxOffset := total - viewport
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.remoteOffset > maxOffset {
+		m.remoteOffset = maxOffset
+	}
+	if m.remoteBranchCursor < m.remoteOffset {
+		m.remoteOffset = m.remoteBranchCursor
+	} else if m.remoteBranchCursor >= m.remoteOffset+viewport {
+		m.remoteOffset = m.remoteBranchCursor - viewport + 1
+	}
+}
+
+func runJobQueueCmd(queue *job.Queue, resetMainQueue bool) tea.Cmd {
+	return func() tea.Msg {
+		failures := queue.StartJobsAsync()
+		return jobQueueResultMsg{
+			resetMainQueue: resetMainQueue,
+			failures:       failures,
+		}
+	}
 }
 
 // cycleMode cycles through available modes
@@ -408,12 +1550,30 @@ func (m *Model) sortByTime() {
 	sort.Sort(git.LastModified(m.repositories))
 }
 
+func (m *Model) clearSuccessFormatting() {
+	for _, repo := range m.repositories {
+		if repo == nil {
+			continue
+		}
+		if repo.WorkStatus() == git.Success {
+			repo.SetWorkStatus(git.Available)
+		}
+	}
+}
+
 func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
 	items := m.branchPanelItems()
 	count := len(items)
 	if count == 0 {
 		return m, nil
 	}
+	viewport := m.branchViewportSize(count)
+	if viewport <= 0 {
+		viewport = count
+	}
+	m.ensureBranchCursorVisible(count, viewport)
+
+	var cmd tea.Cmd
 
 	switch key {
 	case "up", "k":
@@ -424,42 +1584,51 @@ func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
 		m.branchCursor = 0
 	case "end", "G":
 		m.branchCursor = count - 1
-	case "enter", "c":
+	case " ", "space", "c":
 		branchName := items[clampIndex(m.branchCursor, count)].Name
 		if branchName == "" || branchName == "<unknown>" {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		if m.hasMultipleTagged() {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, m.checkoutBranchMultiCmd(m.taggedRepositories(), branchName)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		branch := findBranchByName(repos[0], branchName)
-		return m, m.checkoutBranchCmd(repos[0], branch)
+		cmd = m.checkoutBranchCmd(repos[0], branch)
 	case "d":
 		branchName := items[clampIndex(m.branchCursor, count)].Name
 		if branchName == "" || branchName == "<unknown>" {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		if m.hasMultipleTagged() {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, m.deleteBranchMultiCmd(m.taggedRepositories(), branchName)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		repo := repos[0]
 		if repo.State != nil && repo.State.Branch != nil && repo.State.Branch.Name == branchName {
 			repo.State.Message = "cannot delete current branch"
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		branch := findBranchByName(repo, branchName)
-		return m, m.deleteBranchCmd(repo, branch)
+		cmd = m.deleteBranchCmd(repo, branch)
 	}
 
-	return m, nil
+	m.ensureBranchCursorVisible(count, viewport)
+
+	return m, cmd
 }
 
 func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
@@ -468,6 +1637,13 @@ func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
 	if count == 0 {
 		return m, nil
 	}
+	viewport := m.remoteViewportSize(count)
+	if viewport <= 0 {
+		viewport = count
+	}
+	m.ensureRemoteCursorVisible(count, viewport)
+
+	var cmd tea.Cmd
 
 	switch key {
 	case "up", "k":
@@ -478,29 +1654,34 @@ func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
 		m.remoteBranchCursor = 0
 	case "end", "G":
 		m.remoteBranchCursor = count - 1
-	case "enter", "c":
+	case " ", "space", "c":
 		entry := items[clampIndex(m.remoteBranchCursor, count)]
 		if m.hasMultipleTagged() {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, m.checkoutRemoteBranchMultiCmd(m.taggedRepositories(), entry)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, nil
 		}
-		return m, m.checkoutRemoteBranchCmd(repos[0], entry)
+		cmd = m.checkoutRemoteBranchCmd(repos[0], entry)
 	case "d":
 		entry := items[clampIndex(m.remoteBranchCursor, count)]
 		if m.hasMultipleTagged() {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, m.deleteRemoteBranchMultiCmd(m.taggedRepositories(), entry)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, nil
 		}
-		return m, m.deleteRemoteBranchCmd(repos[0], entry)
+		cmd = m.deleteRemoteBranchCmd(repos[0], entry)
 	}
 
-	return m, nil
+	m.ensureRemoteCursorVisible(count, viewport)
+	return m, cmd
 }
 
 func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
@@ -525,7 +1706,7 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 	if count == 0 {
 		return m, nil
 	}
-	viewport := m.commitViewportSize()
+	viewport := m.commitViewportSize(count)
 	if viewport > count {
 		viewport = count
 	}
@@ -533,22 +1714,28 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "up", "k":
 		wrapCursor(&m.commitCursor, count, -1)
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "down", "j":
 		wrapCursor(&m.commitCursor, count, 1)
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "home", "g":
 		m.commitCursor = 0
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "end", "G":
 		m.commitCursor = count - 1
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+f", "pgdown":
 		m.commitCursor += viewport
 		if m.commitCursor >= count {
 			m.commitCursor = count - 1
 		}
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+b", "pgup":
 		m.commitCursor -= viewport
 		if m.commitCursor < 0 {
 			m.commitCursor = 0
 		}
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+d":
 		half := viewport / 2
 		if half < 1 {
@@ -558,6 +1745,7 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 		if m.commitCursor >= count {
 			m.commitCursor = count - 1
 		}
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+u":
 		half := viewport / 2
 		if half < 1 {
@@ -567,7 +1755,16 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 		if m.commitCursor < 0 {
 			m.commitCursor = 0
 		}
-	case "enter", "c":
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
+	case "right", "l":
+		if m.adjustCommitDetailScroll(1) {
+			return m, nil
+		}
+	case "left":
+		if m.adjustCommitDetailScroll(-1) {
+			return m, nil
+		}
+	case " ", "space", "c":
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.checkoutCommitCmd(repo, commit)
 	case "s":
@@ -577,6 +1774,9 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.resetToCommitCmd(repo, commit, command.ResetMixed)
 	case "h":
+		if m.adjustCommitDetailScroll(-1) {
+			return m, nil
+		}
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.resetToCommitCmd(repo, commit, command.ResetHard)
 	}
@@ -609,6 +1809,11 @@ func (m *Model) activatePanel(panel SidePanelType) {
 				break
 			}
 		}
+		viewport := m.branchViewportSize(len(items))
+		if viewport <= 0 {
+			viewport = len(items)
+		}
+		m.ensureBranchCursorVisible(len(items), viewport)
 	case RemotePanel:
 		items := m.remotePanelItems()
 		currentFull := ""
@@ -621,19 +1826,26 @@ func (m *Model) activatePanel(panel SidePanelType) {
 				break
 			}
 		}
+		viewport := m.remoteViewportSize(len(items))
+		if viewport <= 0 {
+			viewport = len(items)
+		}
+		m.ensureRemoteCursorVisible(len(items), viewport)
 	case CommitPanel:
 		if repo != nil && repo.State != nil && repo.State.Branch != nil {
+			m.resetAllCommitDetailScroll(repo)
 			if len(repo.State.Branch.Commits) == 0 {
 				_ = repo.State.Branch.InitializeCommits(repo)
 			}
-			if len(repo.State.Branch.Commits) > 0 {
+			total := len(repo.State.Branch.Commits)
+			if total > 0 {
 				m.commitOffset = 0
-				m.commitCursor = clampIndex(m.commitCursor, len(repo.State.Branch.Commits))
-				viewport := m.commitViewportSize()
-				if viewport > len(repo.State.Branch.Commits) {
-					viewport = len(repo.State.Branch.Commits)
+				m.commitCursor = clampIndex(m.commitCursor, total)
+				viewport := m.commitViewportSize(total)
+				if viewport > total {
+					viewport = total
 				}
-				m.ensureCommitCursorVisible(len(repo.State.Branch.Commits), viewport)
+				m.ensureCommitCursorVisible(total, viewport)
 			}
 		}
 	}
@@ -646,9 +1858,19 @@ func (m *Model) ensureSelectionWithinBounds(panel SidePanelType) {
 	case BranchPanel:
 		length := len(m.branchPanelItems())
 		m.branchCursor = clampIndex(m.branchCursor, length)
+		viewport := m.branchViewportSize(length)
+		if viewport <= 0 {
+			viewport = length
+		}
+		m.ensureBranchCursorVisible(length, viewport)
 	case RemotePanel:
 		length := len(m.remotePanelItems())
 		m.remoteBranchCursor = clampIndex(m.remoteBranchCursor, length)
+		viewport := m.remoteViewportSize(length)
+		if viewport <= 0 {
+			viewport = length
+		}
+		m.ensureRemoteCursorVisible(length, viewport)
 	case CommitPanel:
 		repo := m.currentRepository()
 		length := 0
@@ -656,22 +1878,12 @@ func (m *Model) ensureSelectionWithinBounds(panel SidePanelType) {
 			length = len(repo.State.Branch.Commits)
 		}
 		m.commitCursor = clampIndex(m.commitCursor, length)
-		viewport := m.commitViewportSize()
+		viewport := m.commitViewportSize(length)
 		if viewport > length {
 			viewport = length
 		}
 		m.ensureCommitCursorVisible(length, viewport)
 	}
-}
-
-func (m *Model) currentRepository() *git.Repository {
-	if len(m.repositories) == 0 {
-		return nil
-	}
-	if m.cursor < 0 || m.cursor >= len(m.repositories) {
-		return nil
-	}
-	return m.repositories[m.cursor]
 }
 
 func (m *Model) notifyMultiSelectionRestriction(message string) {
@@ -947,18 +2159,6 @@ func (m *Model) resetToCommitCmd(repo *git.Repository, commit *git.Commit, reset
 		}
 		return repoActionResultMsg{panel: CommitPanel}
 	}
-}
-
-func (m *Model) commitViewportSize() int {
-	height := m.height
-	if height <= 0 {
-		height = 24
-	}
-	viewport := height - 8
-	if viewport < 1 {
-		viewport = 1
-	}
-	return viewport
 }
 
 func (m *Model) ensureCommitCursorVisible(total, viewport int) {

@@ -140,9 +140,7 @@ func (r *Repository) isClean() bool {
 		return false
 	}
 	s := string(out)
-	if strings.HasSuffix(s, "\n") {
-		s = s[:len(s)-1]
-	}
+	s = strings.TrimSuffix(s, "\n")
 	if len(s) >= 0 {
 		vs := strings.Split(s, "\n")
 		line := vs[len(vs)-1]

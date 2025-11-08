@@ -48,10 +48,6 @@ func (m *Model) taggedRepositories() []*git.Repository {
 	})
 }
 
-func (m *Model) hasTaggedRepositories() bool {
-	return len(m.taggedRepositories()) > 0
-}
-
 func (m *Model) hasMultipleTagged() bool {
 	return len(m.taggedRepositories()) > 1
 }

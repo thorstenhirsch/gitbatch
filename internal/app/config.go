@@ -205,12 +205,3 @@ func osConfigDirectory(osName string) (osConfigDirectory string) {
 	}
 	return osConfigDirectory
 }
-
-// clearConfigCache clears the cached configuration (useful for testing or config updates)
-func clearConfigCache() {
-	configMutex.Lock()
-	defer configMutex.Unlock()
-	cachedConfig = nil
-	// Reset the sync.Once to allow reloading
-	configOnce = sync.Once{}
-}

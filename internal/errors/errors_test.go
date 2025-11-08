@@ -4,16 +4,22 @@ import (
 	"testing"
 )
 
-func TestParseGitError(t *testing.T) {
-	var tests = []struct {
-		input    string
-		expected error
-	}{
-		{"", ErrUnclassified},
+func TestParseGitErrorReturnsUnknownWhenEmpty(t *testing.T) {
+	output := ParseGitError("", nil)
+	if output == nil {
+		t.Fatalf("expected error, got nil")
 	}
-	for _, test := range tests {
-		if output := ParseGitError(test.input, nil); output != test.expected {
-			t.Errorf("Test Failed. %s expected, output: %s", test.expected.Error(), output.Error())
-		}
+	if output.Error() != "unknown error" {
+		t.Fatalf("expected 'unknown error', got %q", output.Error())
+	}
+}
+
+func TestParseGitErrorReturnsTrimmedOutput(t *testing.T) {
+	output := ParseGitError("fatal: failure\n", nil)
+	if output == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if output.Error() != "fatal: failure" {
+		t.Fatalf("expected trimmed message, got %q", output.Error())
 	}
 }

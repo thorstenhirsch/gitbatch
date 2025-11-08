@@ -40,11 +40,12 @@ func Status(r *git.Repository) ([]*git.File, error) {
 func PlainStatus(r *git.Repository) (string, error) {
 	args := make([]string, 0)
 	args = append(args, "status")
+	args = append(args, "--short")
 	output, err := Run(r.AbsPath, "git", args)
 	if err != nil {
 		return "", err
 	}
-	re := regexp.MustCompile(`\n?\r`)
+	re := regexp.MustCompile(`\r?\n`)
 	output = re.ReplaceAllString(output, "\n")
 	return output, err
 }

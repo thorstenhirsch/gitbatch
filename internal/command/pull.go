@@ -33,6 +33,10 @@ type PullOptions struct {
 	// Force allows the pull to update a local branch even when the remote
 	// branch does not descend from it.
 	Force bool
+	// FFOnly ensures only fast-forward merges are allowed.
+	FFOnly bool
+	// Rebase performs the pull using rebase instead of merge.
+	Rebase bool
 	// Mode is the command mode
 	CommandMode Mode
 }
@@ -41,7 +45,15 @@ type PullOptions struct {
 func Pull(r *git.Repository, o *PullOptions) (err error) {
 	pullTryCount = 0
 
+	if o == nil {
+		return nil
+	}
+
 	// here we configure pull operation
+	if o.CommandMode == ModeNative && (o.FFOnly || o.Rebase) {
+		return pullWithGit(r, o)
+	}
+
 	switch o.CommandMode {
 	case ModeLegacy:
 		err = pullWithGit(r, o)
@@ -57,11 +69,20 @@ func pullWithGit(r *git.Repository, options *PullOptions) (err error) {
 	args := make([]string, 0)
 	args = append(args, "pull")
 	// parse options to command line arguments
-	if len(options.RemoteName) > 0 {
-		args = append(args, options.RemoteName)
+	if options.FFOnly {
+		args = append(args, "--ff-only")
+	}
+	if options.Rebase {
+		args = append(args, "--rebase")
 	}
 	if options.Force {
 		args = append(args, "-f")
+	}
+	if len(options.RemoteName) > 0 {
+		args = append(args, options.RemoteName)
+	}
+	if len(options.ReferenceName) > 0 {
+		args = append(args, options.ReferenceName)
 	}
 	ref, _ := r.Repo.Head()
 	if out, err := Run(r.AbsPath, "git", args); err != nil {
@@ -78,6 +99,10 @@ func pullWithGit(r *git.Repository, options *PullOptions) (err error) {
 }
 
 func pullWithGoGit(r *git.Repository, options *PullOptions) (err error) {
+	if options.FFOnly || options.Rebase {
+		return pullWithGit(r, options)
+	}
+
 	opt := &gogit.PullOptions{
 		RemoteName:   options.RemoteName,
 		SingleBranch: options.SingleBranch,
