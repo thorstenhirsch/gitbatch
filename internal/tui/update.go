@@ -364,15 +364,28 @@ func cloneJobWithCredentials(original *job.Job, creds *git.Credentials) *job.Job
 		case *command.FetchOptions:
 			copyCfg := *cfg
 			copyCfg.Credentials = creds
+			if copyCfg.CommandMode == 0 {
+				copyCfg.CommandMode = command.ModeLegacy
+			}
+			if copyCfg.Timeout <= 0 {
+				copyCfg.Timeout = command.DefaultFetchTimeout
+			}
 			opts = &copyCfg
 		case command.FetchOptions:
 			copyCfg := cfg
 			copyCfg.Credentials = creds
+			if copyCfg.CommandMode == 0 {
+				copyCfg.CommandMode = command.ModeLegacy
+			}
+			if copyCfg.Timeout <= 0 {
+				copyCfg.Timeout = command.DefaultFetchTimeout
+			}
 			opts = &copyCfg
 		default:
 			opts = &command.FetchOptions{
 				RemoteName:  defaultRemoteName(original.Repository),
-				CommandMode: command.ModeNative,
+				CommandMode: command.ModeLegacy,
+				Timeout:     command.DefaultFetchTimeout,
 				Credentials: creds,
 			}
 		}
@@ -1002,7 +1015,10 @@ func (m *Model) startFetchForRepos(repos []*git.Repository) tea.Cmd {
 		if status == git.Working || status == git.Queued || status == git.Pending {
 			continue
 		}
-		if repo.State.Remote == nil {
+		if repo.State == nil || repo.State.Remote == nil {
+			if repo.State != nil && repo.State.Message == "" {
+				repo.State.Message = "no remote configured"
+			}
 			continue
 		}
 		repo.State.Message = ""
@@ -1025,13 +1041,21 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 		for _, repo := range repos {
 			opts := &command.FetchOptions{
 				RemoteName:  defaultRemoteName(repo),
-				CommandMode: command.ModeNative,
+				CommandMode: command.ModeLegacy,
+				Timeout:     command.DefaultFetchTimeout,
 			}
 			if err := queue.AddJob(&job.Job{
 				JobType:    job.FetchJob,
 				Repository: repo,
 				Options:    opts,
 			}); err != nil {
+				repo.SetWorkStatus(git.Fail)
+				if repo.State != nil {
+					repo.State.Message = err.Error()
+					if repo.State.Branch != nil {
+						repo.State.Branch.Clean = false
+					}
+				}
 				failures = append(failures, repo.Name)
 				continue
 			}

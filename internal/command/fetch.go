@@ -1,9 +1,13 @@
 package command
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -12,6 +16,8 @@ import (
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
+
+const DefaultFetchTimeout = 8 * time.Second
 
 var (
 	fetchTryCount int
@@ -36,6 +42,9 @@ type FetchOptions struct {
 	Force bool
 	// Mode is the command mode
 	CommandMode Mode
+	// Timeout is the maximum duration allowed for the fetch command when
+	// executed via the legacy git CLI. If zero, a sensible default is used.
+	Timeout time.Duration
 	// There should be more room for authentication, tags and progress
 }
 
@@ -46,6 +55,9 @@ func Fetch(r *git.Repository, o *FetchOptions) (err error) {
 	// default mode is go-git (this may be configured)
 	mode := o.CommandMode
 	fetchTryCount = 0
+	if o.Timeout <= 0 {
+		o.Timeout = DefaultFetchTimeout
+	}
 	// prune and dry run is not supported from go-git yet, rely on old friend
 	if o.Prune || o.DryRun {
 		mode = ModeLegacy
@@ -88,8 +100,20 @@ func fetchWithGit(r *git.Repository, options *FetchOptions) (err error) {
 	if options.DryRun {
 		args = append(args, "--dry-run")
 	}
-	if out, err := Run(r.AbsPath, "git", args); err != nil {
-		return gerr.ParseGitError(out, err)
+	var (
+		out    string
+		errRun error
+	)
+	if options.Timeout > 0 {
+		out, errRun = RunWithTimeout(r.AbsPath, "git", args, options.Timeout)
+	} else {
+		out, errRun = Run(r.AbsPath, "git", args)
+	}
+	if errRun != nil {
+		if errors.Is(errRun, context.DeadlineExceeded) {
+			return fmt.Errorf("fetch timed out after %s: %w", options.Timeout, errRun)
+		}
+		return gerr.ParseGitError(out, errRun)
 	}
 	r.SetWorkStatus(git.Success)
 	r.State.Message = ""

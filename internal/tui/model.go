@@ -117,27 +117,28 @@ var tagWarningColor = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
-	App             lipgloss.Style
-	Title           lipgloss.Style
-	StatusBarPull   lipgloss.Style
-	StatusBarMerge  lipgloss.Style
-	StatusBarRebase lipgloss.Style
-	StatusBarPush   lipgloss.Style
-	Help            lipgloss.Style
-	List            lipgloss.Style
-	ListItem        lipgloss.Style
-	SelectedItem    lipgloss.Style
-	QueuedItem      lipgloss.Style
-	WorkingItem     lipgloss.Style
-	SuccessItem     lipgloss.Style
-	FailedItem      lipgloss.Style
-	DisabledItem    lipgloss.Style
-	BranchInfo      lipgloss.Style
-	KeyBinding      lipgloss.Style
-	Panel           lipgloss.Style
-	PanelTitle      lipgloss.Style
-	Error           lipgloss.Style
-	TableBorder     lipgloss.Style
+	App               lipgloss.Style
+	Title             lipgloss.Style
+	StatusBarPull     lipgloss.Style
+	StatusBarMerge    lipgloss.Style
+	StatusBarRebase   lipgloss.Style
+	StatusBarPush     lipgloss.Style
+	Help              lipgloss.Style
+	List              lipgloss.Style
+	ListItem          lipgloss.Style
+	SelectedItem      lipgloss.Style
+	DirtySelectedItem lipgloss.Style
+	QueuedItem        lipgloss.Style
+	WorkingItem       lipgloss.Style
+	SuccessItem       lipgloss.Style
+	FailedItem        lipgloss.Style
+	DisabledItem      lipgloss.Style
+	BranchInfo        lipgloss.Style
+	KeyBinding        lipgloss.Style
+	Panel             lipgloss.Style
+	PanelTitle        lipgloss.Style
+	Error             lipgloss.Style
+	TableBorder       lipgloss.Style
 }
 
 // DefaultStyles returns the default style set
@@ -172,6 +173,9 @@ func DefaultStyles() *Styles {
 		ListItem: lipgloss.NewStyle(),
 		SelectedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#1976D2", Dark: "#64B5F6"}).
+			Bold(true),
+		DirtySelectedItem: lipgloss.NewStyle().
+			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
 			Foreground(tagHighlightColor),

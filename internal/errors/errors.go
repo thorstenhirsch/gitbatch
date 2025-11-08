@@ -1,6 +1,7 @@
 package errors
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -61,6 +62,11 @@ func (e GitError) Error() string {
 // ParseGitError takes git output as an input and tries to find some meaningful
 // errors can be used by the app
 func ParseGitError(out string, err error) error {
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" && err != nil {
+		trimmed = strings.TrimSpace(err.Error())
+	}
+
 	if strings.Contains(out, "error: Your local changes to the following files would be overwritten by merge") {
 		return ErrMergeAbortedTryCommit
 	} else if strings.Contains(out, "ERROR: Repository not found") {
@@ -80,5 +86,10 @@ func ParseGitError(out string, err error) error {
 	} else if strings.Contains(out, "would be overwritten by merge") {
 		return ErrOverwrittenByMerge
 	}
-	return ErrUnclassified
+
+	if trimmed == "" {
+		return fmt.Errorf("unknown error")
+	}
+
+	return fmt.Errorf("%s", trimmed)
 }

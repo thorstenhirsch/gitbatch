@@ -41,8 +41,10 @@ func operate(directory, mode string) error {
 	switch mode {
 	case "fetch":
 		return command.Fetch(r, &command.FetchOptions{
-			RemoteName: remoteName,
-			Progress:   true,
+			RemoteName:  remoteName,
+			Progress:    true,
+			CommandMode: command.ModeLegacy,
+			Timeout:     command.DefaultFetchTimeout,
 		})
 	case "pull":
 		return command.Pull(r, &command.PullOptions{

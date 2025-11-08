@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/thorstenhirsch/gitbatch/internal/command"
+	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -15,6 +16,13 @@ type Job struct {
 	Repository *git.Repository
 	// Options is a placeholder for operation options
 	Options interface{}
+}
+
+func markRepoDirty(repo *git.Repository) {
+	if repo == nil || repo.State == nil || repo.State.Branch == nil {
+		return
+	}
+	repo.State.Branch.Clean = false
 }
 
 // Type is the a git operation supported
@@ -67,12 +75,16 @@ func (j *Job) start() error {
 			}
 			opts = &command.FetchOptions{
 				RemoteName:  remoteName,
-				CommandMode: command.ModeNative,
+				CommandMode: command.ModeLegacy,
+				Timeout:     command.DefaultFetchTimeout,
 			}
 		}
 		if err := command.Fetch(j.Repository, opts); err != nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = cleanErrorMessage(err.Error())
+			if j.Repository.State != nil {
+				j.Repository.State.Message = cleanErrorMessage(err.Error())
+			}
+			markRepoDirty(j.Repository)
 			return err
 		}
 		j.Repository.SetWorkStatus(git.Available)
@@ -102,18 +114,27 @@ func (j *Job) start() error {
 		}
 		if j.Repository.State.Branch.Upstream == nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = "upstream not set"
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "upstream not set"
+			}
+			markRepoDirty(j.Repository)
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = "remote not set"
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "remote not set"
+			}
+			markRepoDirty(j.Repository)
 			return nil
 		}
 		opts = ensurePullOptions(opts, j.Repository, true, false)
 		if err := command.Pull(j.Repository, opts); err != nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = cleanErrorMessage(err.Error())
+			if j.Repository.State != nil {
+				j.Repository.State.Message = cleanErrorMessage(err.Error())
+			}
+			markRepoDirty(j.Repository)
 			return err
 		}
 		if suppress {
@@ -126,14 +147,20 @@ func (j *Job) start() error {
 		j.Repository.State.Message = "merging.."
 		if j.Repository.State.Branch.Upstream == nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = "upstream not set"
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "upstream not set"
+			}
+			markRepoDirty(j.Repository)
 			return nil
 		}
 		if err := command.Merge(j.Repository, &command.MergeOptions{
 			BranchName: j.Repository.State.Branch.Upstream.Name,
 		}); err != nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = cleanErrorMessage(err.Error())
+			if j.Repository.State != nil {
+				j.Repository.State.Message = cleanErrorMessage(err.Error())
+			}
+			markRepoDirty(j.Repository)
 			return err
 		}
 		j.Repository.SetWorkStatus(git.Success)
@@ -142,12 +169,18 @@ func (j *Job) start() error {
 		j.Repository.State.Message = "rebasing.."
 		if j.Repository.State.Branch.Upstream == nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = "upstream not set"
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "upstream not set"
+			}
+			markRepoDirty(j.Repository)
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = "remote not set"
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "remote not set"
+			}
+			markRepoDirty(j.Repository)
 			return nil
 		}
 		var opts *command.PullOptions
@@ -159,7 +192,10 @@ func (j *Job) start() error {
 		opts = ensurePullOptions(opts, j.Repository, false, true)
 		if err := command.Pull(j.Repository, opts); err != nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = cleanErrorMessage(err.Error())
+			if j.Repository.State != nil {
+				j.Repository.State.Message = cleanErrorMessage(err.Error())
+			}
+			markRepoDirty(j.Repository)
 			return err
 		}
 		j.Repository.SetWorkStatus(git.Success)
@@ -168,12 +204,18 @@ func (j *Job) start() error {
 		j.Repository.State.Message = "pushing.."
 		if j.Repository.State.Remote == nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = "remote not set"
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "remote not set"
+			}
+			markRepoDirty(j.Repository)
 			return nil
 		}
 		if j.Repository.State.Branch == nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = "branch not set"
+			if j.Repository.State != nil {
+				j.Repository.State.Message = "branch not set"
+			}
+			markRepoDirty(j.Repository)
 			return nil
 		}
 		var (
@@ -200,7 +242,10 @@ func (j *Job) start() error {
 		opts = ensurePushOptions(opts, j.Repository)
 		if err := command.Push(j.Repository, opts); err != nil {
 			j.Repository.SetWorkStatus(git.Fail)
-			j.Repository.State.Message = cleanErrorMessage(err.Error())
+			if j.Repository.State != nil {
+				j.Repository.State.Message = cleanErrorMessage(err.Error())
+			}
+			markRepoDirty(j.Repository)
 			return err
 		}
 		if suppress {
@@ -287,9 +332,16 @@ func cleanErrorMessage(msg string) string {
 	msg = strings.ReplaceAll(msg, "\r", " ")
 	msg = strings.ReplaceAll(msg, "\n", " ")
 	msg = strings.TrimSpace(msg)
+	msg = strings.TrimPrefix(msg, gerr.ErrUnclassified.Error()+": ")
+	if msg == gerr.ErrUnclassified.Error() {
+		msg = ""
+	}
 	if msg == "" {
-		return msg
+		return "unknown error"
 	}
 	fields := strings.Fields(msg)
+	if len(fields) == 0 {
+		return "unknown error"
+	}
 	return strings.Join(fields, " ")
 }

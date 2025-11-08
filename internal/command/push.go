@@ -1,9 +1,6 @@
 package command
 
 import (
-	"fmt"
-	"strings"
-
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
@@ -48,15 +45,7 @@ func Push(r *git.Repository, options *PushOptions) error {
 	}
 	out, err := Run(r.AbsPath, "git", args)
 	if err != nil {
-		trimmed := strings.TrimSpace(out)
-		base := gerr.ParseGitError(out, err)
-		if trimmed == "" {
-			return base
-		}
-		if base == gerr.ErrUnclassified {
-			return fmt.Errorf("%s", trimmed)
-		}
-		return fmt.Errorf("%w: %s", base, trimmed)
+		return gerr.ParseGitError(out, err)
 	}
 	r.SetWorkStatus(git.Success)
 	r.State.Message = "push completed"

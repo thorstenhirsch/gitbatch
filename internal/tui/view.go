@@ -349,7 +349,8 @@ func (m *Model) renderOverview() string {
 	var lines []string
 	for i := startIdx; i < endIdx; i++ {
 		r := m.repositories[i]
-		line := m.renderRepositoryLine(r, i == m.cursor, colWidths)
+		selected := i == m.cursor
+		line := m.renderRepositoryLine(r, selected, colWidths)
 		lines = append(lines, line)
 	}
 
@@ -389,9 +390,11 @@ func (m *Model) renderOverview() string {
 func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths columnWidths) string {
 	statusIcon := " "
 	style := m.styles.ListItem
+	status := r.WorkStatus()
 	dirty := repoIsDirty(r)
+	failed := status == git.Fail
 
-	switch status := r.WorkStatus(); status {
+	switch status {
 	case git.Pending:
 		statusIcon = waitingSymbol
 	case git.Queued:
@@ -411,7 +414,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		statusIcon = failSymbol
 		style = m.styles.FailedItem
 	}
-	if dirty {
+	if dirty && !failed {
 		statusIcon = dirtySymbol
 		style = m.styles.DisabledItem
 	}
@@ -427,7 +430,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	repoName := truncateString(r.Name, repoNameWidth)
 	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
-	if dirty {
+	if dirty && !failed && !selected {
 		repoColumn = m.styles.DisabledItem.Render(repoColumn)
 	}
 
@@ -437,43 +440,56 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	branchContent := truncateString(branchContent(r), branchContentWidth)
 	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
-	if dirty {
+	if dirty && !failed && !selected {
 		branchColumn = m.styles.DisabledItem.Render(branchColumn)
 	}
 
-	commitMsg, commitHash := commitSummary(r)
-	tags := collectTags(r, commitHash)
-	var tagsText string
-	if len(tags) > 0 {
-		tagsText = "[" + strings.Join(tags, ", ") + "]"
-	}
-	commitParts := make([]string, 0, 2)
-	if tagsText != "" {
-		commitParts = append(commitParts, tagsText)
-	}
-	if commitMsg != "" {
-		commitParts = append(commitParts, commitMsg)
-	}
-	commitContent := strings.Join(commitParts, " ")
 	commitContentWidth := colWidths.commitMsg - 1
 	if commitContentWidth < 0 {
 		commitContentWidth = 0
 	}
-	if r.WorkStatus() == git.Fail && r.State != nil && r.State.Message != "" {
-		commitContent = truncateString(singleLineMessage(r.State.Message), commitContentWidth)
+
+	var commitContent string
+	if failed && r.State != nil {
+		message := singleLineMessage(r.State.Message)
+		if message == "" {
+			message = "unknown error"
+		}
+		commitContent = message
 	} else {
-		commitContent = truncateString(commitContent, commitContentWidth)
+		commitMsg, commitHash := commitSummary(r)
+		tags := collectTags(r, commitHash)
+		var tagsText string
+		if len(tags) > 0 {
+			tagsText = "[" + strings.Join(tags, ", ") + "]"
+		}
+		commitParts := make([]string, 0, 2)
+		if tagsText != "" {
+			commitParts = append(commitParts, tagsText)
+		}
+		if commitMsg != "" {
+			commitParts = append(commitParts, commitMsg)
+		}
+		commitContent = strings.Join(commitParts, " ")
 	}
+	commitContent = truncateString(commitContent, commitContentWidth)
 	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
-	if dirty {
+	if dirty && !failed && !selected {
 		commitColumn = m.styles.DisabledItem.Render(commitColumn)
 	}
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
 	if selected {
-		styledRepoCol = m.styles.SelectedItem.Render(repoColumn)
-		styledBranchCol = m.styles.SelectedItem.Render(branchColumn)
-		styledCommitCol = m.styles.SelectedItem.Render(commitColumn)
+		if dirty || failed {
+			highlight := m.styles.DirtySelectedItem
+			styledRepoCol = highlight.Render(repoColumn)
+			styledBranchCol = highlight.Render(branchColumn)
+			styledCommitCol = highlight.Render(commitColumn)
+		} else {
+			styledRepoCol = m.styles.SelectedItem.Render(repoColumn)
+			styledBranchCol = m.styles.SelectedItem.Render(branchColumn)
+			styledCommitCol = m.styles.SelectedItem.Render(commitColumn)
+		}
 	} else {
 		styledRepoCol = style.Render(repoColumn)
 		styledBranchCol = style.Render(branchColumn)
@@ -560,6 +576,8 @@ func firstLine(message string) string {
 func singleLineMessage(message string) string {
 	message = strings.ReplaceAll(message, "\r", " ")
 	message = strings.ReplaceAll(message, "\n", " ")
+	message = strings.ReplaceAll(message, "\v", " ")
+	message = strings.ReplaceAll(message, "\f", " ")
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return message
@@ -576,13 +594,31 @@ func formatErrorForDisplay(err error) string {
 
 // truncateString truncates a string to the specified length, adding "..." if needed
 func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if maxLen <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		runes := []rune(s)
+		if len(runes) > maxLen {
+			runes = runes[:maxLen]
+		}
+		return string(runes)
 	}
-	return s[:maxLen-3] + "..."
+	b := strings.Builder{}
+	current := 0
+	for _, r := range s {
+		rWidth := lipgloss.Width(string(r))
+		if current+rWidth > maxLen-3 {
+			break
+		}
+		b.WriteRune(r)
+		current += rWidth
+	}
+	b.WriteString("...")
+	return b.String()
 }
 
 // renderFocus renders the focus view with side panel

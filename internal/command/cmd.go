@@ -3,7 +3,9 @@ package command
 import (
 	"context"
 	"log"
+	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -41,8 +43,37 @@ func RunWithTimeout(d string, c string, args []string, timeout time.Duration) (s
 	if d != "" {
 		cmd.Dir = d
 	}
+	cmd.Env = enrichGitEnv(os.Environ())
+	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded && runtime.GOOS != "windows" && cmd.Process != nil {
+		// Best-effort kill of the entire process group in case children are still running
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	return trimTrailingNewline(string(output)), err
+}
+
+func enrichGitEnv(base []string) []string {
+	env := make([]string, len(base))
+	copy(env, base)
+	env = ensureEnv(env, "GIT_TERMINAL_PROMPT", "0")
+	env = ensureEnv(env, "GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1")
+	env = ensureEnv(env, "GIT_HTTP_LOW_SPEED_LIMIT", "1")
+	env = ensureEnv(env, "GIT_HTTP_LOW_SPEED_TIME", "10")
+	return env
+}
+
+func ensureEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 // Return returns if we supposed to get return value as an int of a command
