@@ -39,14 +39,7 @@ type columnWidths struct {
 	commitMsg int
 }
 
-var panelBorderColor = lipgloss.AdaptiveColor{Light: "#7E57C2", Dark: "#9575CD"}
 var commonPanelBorderColor = lipgloss.AdaptiveColor{Light: "#FB8C00", Dark: "#FFB74D"}
-
-type panelRender struct {
-	lines       []string
-	topLabel    string
-	bottomLabel string
-}
 
 const (
 	maxRepoDisplayWidth   = 40
@@ -106,14 +99,6 @@ func (m *Model) sidePanelMaxWidth() int {
 		base = m.width
 	}
 	return base
-}
-
-func (m *Model) sidePanelContentWidth() int {
-	width := m.sidePanelMaxWidth() - panelHorizontalFrame
-	if width < 1 {
-		width = 1
-	}
-	return width
 }
 
 func (m *Model) sidePanelTopPadding() int {
@@ -1402,9 +1387,6 @@ func (m *Model) renderStatusBar() string {
 	center := ""
 
 	right := "TAB: lazygit | ? for help"
-	if m.currentView == FocusView {
-		right = "ESC: back | TAB: lazygit | ? for help"
-	}
 
 	leftWidth := lipgloss.Width(left)
 	rightWidth := lipgloss.Width(right)
@@ -1437,7 +1419,7 @@ func (m *Model) renderStatusBar() string {
 			display = strings.Repeat("*", utf8.RuneCountInString(m.credentialInputBuffer))
 		}
 
-		right = "enter: submit | esc: cancel"
+		right = "enter: submit"
 		maxCenter := totalWidth - lipgloss.Width(left) - lipgloss.Width(right) - 2
 		if maxCenter < 0 {
 			maxCenter = 0
@@ -1447,7 +1429,7 @@ func (m *Model) renderStatusBar() string {
 		if failed {
 			statusBarStyle = m.styles.StatusBarError
 			left = " repo failed"
-			right = "c: clear | esc: cancel"
+			right = "c: clear"
 			rightWidth = lipgloss.Width(right)
 			maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
 			if maxCenter < 0 {
@@ -1462,7 +1444,7 @@ func (m *Model) renderStatusBar() string {
 			statusBarStyle = m.styles.StatusBarDirty
 			left = " repo dirty"
 			center = "Only TAB (lazygit) permitted while working tree is dirty"
-			right = "TAB: lazygit | esc: cancel"
+			right = "TAB: lazygit"
 		} else if m.err != nil {
 			statusBarStyle = m.styles.StatusBarPush
 			maxCenter := totalWidth - leftWidth - rightWidth - 2
@@ -1479,6 +1461,14 @@ func (m *Model) renderStatusBar() string {
 			right = "return: confirm | esc: cancel"
 		} else if !failed && !dirty && m.err == nil {
 			center = fmt.Sprintf("%s", center)
+		}
+	}
+
+	if m.currentView != OverviewView && m.activeCredentialPrompt == nil && m.activeForcePrompt == nil {
+		if right == "" {
+			right = "esc: back"
+		} else if !strings.Contains(strings.ToLower(right), "esc: back") {
+			right = right + " | esc: back"
 		}
 	}
 

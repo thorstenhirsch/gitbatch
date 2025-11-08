@@ -298,6 +298,32 @@ func (b *Branch) InitializeCommits(r *Repository) error {
 	return b.initCommits(r)
 }
 
+// PullableCount returns the number of commits available to pull along with an indicator
+// specifying whether the count could be determined.
+func (b *Branch) PullableCount() (int, bool) {
+	if b == nil || b.Upstream == nil {
+		return 0, false
+	}
+	value := strings.TrimSpace(b.Pullables)
+	if value == "" || value == "?" {
+		return 0, false
+	}
+	count, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
+	}
+	return count, true
+}
+
+// HasIncomingCommits reports whether the branch has pullable commits from its upstream.
+func (b *Branch) HasIncomingCommits() bool {
+	count, ok := b.PullableCount()
+	if !ok {
+		return false
+	}
+	return count > 0
+}
+
 func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {
 	args := []string{"config", "--get", "branch." + branchName + ".remote"}
 	cmd := exec.Command("git", args...)
