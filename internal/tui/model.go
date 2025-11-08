@@ -34,6 +34,10 @@ type Model struct {
 	remoteBranchCursor     int
 	commitCursor           int
 	commitOffset           int
+	commitScrollOffsets    map[string]int
+	commitDetailScroll     map[string]int
+	branchOffset           int
+	remoteOffset           int
 	forcePromptQueue       []*forcePushPrompt
 	activeForcePrompt      *forcePushPrompt
 	credentialPromptQueue  []*credentialPrompt
@@ -112,7 +116,7 @@ var (
 
 var spinnerFrames = []string{"|", "/", "-", "\\"}
 
-var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#F57C00", Dark: "#FFB74D"}
+var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#42A5F5"}
 var tagWarningColor = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}
 
 // Styles holds all lipgloss styles for the UI
@@ -123,6 +127,8 @@ type Styles struct {
 	StatusBarMerge    lipgloss.Style
 	StatusBarRebase   lipgloss.Style
 	StatusBarPush     lipgloss.Style
+	StatusBarDirty    lipgloss.Style
+	StatusBarError    lipgloss.Style
 	Help              lipgloss.Style
 	List              lipgloss.Style
 	ListItem          lipgloss.Style
@@ -155,16 +161,24 @@ func DefaultStyles() *Styles {
 			Background(lipgloss.AdaptiveColor{Light: "#90CAF9", Dark: "#1E88E5"}).
 			Padding(0, 1),
 		StatusBarMerge: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
-			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#041419", Dark: "#E0F7FA"}).
+			Background(lipgloss.AdaptiveColor{Light: "#4DD0E1", Dark: "#00ACC1"}).
 			Padding(0, 1),
 		StatusBarRebase: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#A5D6A7", Dark: "#43A047"}).
 			Padding(0, 1),
-		StatusBarPush: lipgloss.NewStyle().
+		StatusBarDirty: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#4E342E", Dark: "#D7CCC8"}).
+			Background(lipgloss.AdaptiveColor{Light: "#D7CCC8", Dark: "#4E342E"}).
+			Padding(0, 1),
+		StatusBarError: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
-			Background(lipgloss.AdaptiveColor{Light: "#B71C1C", Dark: "#C62828"}).
+			Background(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#C62828"}).
+			Padding(0, 1),
+		StatusBarPush: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
 			Padding(0, 1),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
@@ -172,10 +186,12 @@ func DefaultStyles() *Styles {
 			Padding(1, 2),
 		ListItem: lipgloss.NewStyle(),
 		SelectedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#1976D2", Dark: "#64B5F6"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#0B0B0B", Dark: "#F5F5F5"}).
+			Background(lipgloss.AdaptiveColor{Light: "#90CAF9", Dark: "#1976D2"}).
 			Bold(true),
 		DirtySelectedItem: lipgloss.NewStyle().
-			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#424242", Dark: "#BDBDBD"}).
+			Background(lipgloss.AdaptiveColor{Light: "#E0E0E0", Dark: "#424242"}).
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
 			Foreground(tagHighlightColor),
@@ -219,16 +235,18 @@ func New(mode string, directories []string) *Model {
 	}
 
 	return &Model{
-		directories:  directories,
-		mode:         initialMode,
-		queue:        job.CreateJobQueue(),
-		repositories: make([]*git.Repository, 0),
-		currentView:  OverviewView,
-		sidePanel:    NonePanel,
-		styles:       DefaultStyles(),
-		loading:      true,
-		spinnerIndex: 0,
-		version:      Version,
+		directories:         directories,
+		mode:                initialMode,
+		queue:               job.CreateJobQueue(),
+		repositories:        make([]*git.Repository, 0),
+		currentView:         OverviewView,
+		sidePanel:           NonePanel,
+		styles:              DefaultStyles(),
+		loading:             true,
+		spinnerIndex:        0,
+		version:             Version,
+		commitScrollOffsets: make(map[string]int),
+		commitDetailScroll:  make(map[string]int),
 	}
 }
 

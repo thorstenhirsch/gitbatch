@@ -122,7 +122,11 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.currentView == FocusView {
 			m.currentView = OverviewView
 			m.sidePanel = NonePanel
+			m.clearSuccessFormatting()
 			return m, nil
+		}
+		if m.currentView == OverviewView {
+			m.clearSuccessFormatting()
 		}
 		return m, nil
 
@@ -464,6 +468,7 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.cursor = (m.cursor - 1 + len(m.repositories)) % len(m.repositories)
 		m.cursor = m.findNextReadyIndex(m.cursor, -1)
+		m.resetCommitScrollForSelected()
 		return m, nil
 
 	case "down", "j":
@@ -472,23 +477,28 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.cursor = (m.cursor + 1) % len(m.repositories)
 		m.cursor = m.findNextReadyIndex(m.cursor, 1)
+		m.resetCommitScrollForSelected()
 		return m, nil
 
 	case "g": // First g of gg - we need to check if it's followed by another g
 		// For now, just go to top (single g also works)
 		m.cursor = 0
+		m.resetCommitScrollForSelected()
 
 	case "G": // Shift+G goes to end
 		if len(m.repositories) > 0 {
 			m.cursor = len(m.repositories) - 1
+			m.resetCommitScrollForSelected()
 		}
 
 	case "home":
 		m.cursor = 0
+		m.resetCommitScrollForSelected()
 
 	case "end":
 		if len(m.repositories) > 0 {
 			m.cursor = len(m.repositories) - 1
+			m.resetCommitScrollForSelected()
 		}
 
 	case "ctrl+f", "pgdown": // Ctrl+F and Page Down - scroll forward (down)
@@ -498,6 +508,7 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.repositories) - 1
 		}
 		m.cursor = m.findNextReadyIndex(m.cursor, 1)
+		m.resetCommitScrollForSelected()
 
 	case "ctrl+b", "pgup": // Ctrl+B and Page Up - scroll backward (up)
 		pageSize := m.height - 5
@@ -506,6 +517,7 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 		m.cursor = m.findNextReadyIndex(m.cursor, -1)
+		m.resetCommitScrollForSelected()
 
 	case "ctrl+d": // Ctrl+D - scroll down half page
 		halfPage := (m.height - 5) / 2
@@ -514,6 +526,7 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.repositories) - 1
 		}
 		m.cursor = m.findNextReadyIndex(m.cursor, 1)
+		m.resetCommitScrollForSelected()
 
 	case "ctrl+u": // Ctrl+U - scroll up half page
 		halfPage := (m.height - 5) / 2
@@ -522,6 +535,17 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 		m.cursor = m.findNextReadyIndex(m.cursor, -1)
+		m.resetCommitScrollForSelected()
+
+	case "right", "l":
+		if m.adjustCommitScroll(1) {
+			return m, nil
+		}
+
+	case "left", "h":
+		if m.adjustCommitScroll(-1) {
+			return m, nil
+		}
 
 	case " ", "space":
 		return m, m.toggleQueue()
@@ -1118,8 +1142,11 @@ func (m *Model) findNextReadyIndex(start int, direction int) int {
 			index = 0
 		}
 		repo := m.repositories[index]
-		if repo != nil && (repo.WorkStatus().Ready || repoIsDirty(repo)) {
-			return index
+		if repo != nil {
+			status := repo.WorkStatus()
+			if status == git.Queued || status.Ready || repoIsDirty(repo) {
+				return index
+			}
 		}
 		index += direction
 	}
@@ -1131,6 +1158,364 @@ func (m *Model) findNextReadyIndex(start int, direction int) int {
 		return count - 1
 	}
 	return start
+}
+
+func (m *Model) getCommitScrollOffset(repo *git.Repository) int {
+	if repo == nil || repo.RepoID == "" {
+		return 0
+	}
+	if m.commitScrollOffsets == nil {
+		m.commitScrollOffsets = make(map[string]int)
+	}
+	return m.commitScrollOffsets[repo.RepoID]
+}
+
+func (m *Model) setCommitScrollOffset(repo *git.Repository, offset int) {
+	if repo == nil || repo.RepoID == "" {
+		return
+	}
+	if m.commitScrollOffsets == nil {
+		m.commitScrollOffsets = make(map[string]int)
+	}
+	if offset <= 0 {
+		delete(m.commitScrollOffsets, repo.RepoID)
+		return
+	}
+	m.commitScrollOffsets[repo.RepoID] = offset
+}
+
+func (m *Model) resetCommitScrollForSelected() {
+	repo := m.currentRepository()
+	if repo == nil || m.commitScrollOffsets == nil {
+		return
+	}
+	delete(m.commitScrollOffsets, repo.RepoID)
+}
+
+func (m *Model) adjustCommitScroll(delta int) bool {
+	if delta == 0 {
+		return false
+	}
+	repo := m.currentRepository()
+	if repo == nil {
+		return false
+	}
+	colWidths := calculateColumnWidths(m.width, m.repositories)
+	contentWidth := colWidths.commitMsg - 1
+	if contentWidth <= 0 {
+		return false
+	}
+	content := commitContentForRepo(repo)
+	maxOffset := maxCommitOffset(content, contentWidth)
+	if maxOffset <= 0 {
+		if m.getCommitScrollOffset(repo) != 0 {
+			m.setCommitScrollOffset(repo, 0)
+			return true
+		}
+		return false
+	}
+	offset := m.getCommitScrollOffset(repo)
+	offset += delta
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset == m.getCommitScrollOffset(repo) {
+		return false
+	}
+	m.setCommitScrollOffset(repo, offset)
+	return true
+}
+
+func (m *Model) repoKey(repo *git.Repository) string {
+	if repo == nil {
+		return ""
+	}
+	if repo.RepoID != "" {
+		return repo.RepoID
+	}
+	if repo.AbsPath != "" {
+		return repo.AbsPath
+	}
+	return repo.Name
+}
+
+func (m *Model) commitDetailKey(repo *git.Repository, commit *git.Commit, index int) string {
+	key := m.repoKey(repo)
+	if key == "" {
+		return ""
+	}
+	if commit != nil && commit.Hash != "" {
+		return key + ":" + commit.Hash
+	}
+	return fmt.Sprintf("%s:idx:%d", key, index)
+}
+
+func (m *Model) getCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int) int {
+	if m.commitDetailScroll == nil {
+		return 0
+	}
+	key := m.commitDetailKey(repo, commit, index)
+	if key == "" {
+		return 0
+	}
+	return m.commitDetailScroll[key]
+}
+
+func (m *Model) setCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int, offset int) {
+	key := m.commitDetailKey(repo, commit, index)
+	if key == "" {
+		return
+	}
+	if offset <= 0 {
+		if m.commitDetailScroll != nil {
+			delete(m.commitDetailScroll, key)
+		}
+		return
+	}
+	if m.commitDetailScroll == nil {
+		m.commitDetailScroll = make(map[string]int)
+	}
+	m.commitDetailScroll[key] = offset
+}
+
+func (m *Model) resetCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int) {
+	if m.commitDetailScroll == nil {
+		return
+	}
+	key := m.commitDetailKey(repo, commit, index)
+	if key == "" {
+		return
+	}
+	delete(m.commitDetailScroll, key)
+}
+
+func (m *Model) resetAllCommitDetailScroll(repo *git.Repository) {
+	if repo == nil || m.commitDetailScroll == nil {
+		return
+	}
+	prefix := m.repoKey(repo)
+	if prefix == "" {
+		return
+	}
+	prefix += ":"
+	for key := range m.commitDetailScroll {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.commitDetailScroll, key)
+		}
+	}
+}
+
+func (m *Model) commitPanelContentWidth() int {
+	repo := m.currentRepository()
+	panelWidth, _, ok := m.sidePanelLayoutDimensions(repo)
+	if panelWidth < panelHorizontalFrame+1 || !ok {
+		panelWidth = m.sidePanelMaxWidth()
+	}
+	contentWidth := panelWidth - panelHorizontalFrame
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	return contentWidth
+}
+
+func (m *Model) adjustCommitDetailScroll(delta int) bool {
+	if delta == 0 {
+		return false
+	}
+	repo := m.currentRepository()
+	if repo == nil || repo.State == nil || repo.State.Branch == nil {
+		return false
+	}
+	commits := repo.State.Branch.Commits
+	if len(commits) == 0 {
+		return false
+	}
+	index := clampIndex(m.commitCursor, len(commits))
+	if index < 0 || index >= len(commits) {
+		return false
+	}
+	commit := commits[index]
+	content := commitPanelLineContent(commit)
+	width := m.commitPanelContentWidth()
+	if width <= 0 {
+		return false
+	}
+	maxOffset := maxCommitOffset(content, width)
+	if maxOffset <= 0 {
+		if current := m.getCommitDetailOffset(repo, commit, index); current != 0 {
+			m.resetCommitDetailOffset(repo, commit, index)
+			return true
+		}
+		return false
+	}
+	offset := m.getCommitDetailOffset(repo, commit, index)
+	offset += delta
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset == m.getCommitDetailOffset(repo, commit, index) {
+		return false
+	}
+	m.setCommitDetailOffset(repo, commit, index, offset)
+	return true
+}
+
+func (m *Model) resetCommitDetailScrollForIndex(repo *git.Repository, commits []*git.Commit, index int) {
+	if repo == nil || len(commits) == 0 {
+		return
+	}
+	if index < 0 || index >= len(commits) {
+		return
+	}
+	m.resetCommitDetailOffset(repo, commits[index], index)
+}
+
+func (m *Model) panelLineBudget() int {
+	budget := m.overviewTableBodyHeight() - 3
+	if budget < 0 {
+		budget = 0
+	}
+	return budget
+}
+
+func (m *Model) commitViewportSize(total int) int {
+	budget := m.panelLineBudget()
+	if budget <= 0 {
+		return 0
+	}
+	// reserve one line for instructions
+	remaining := budget - 1
+	if remaining <= 0 {
+		return 0
+	}
+	includeBlank := remaining > 1 && total > 0
+	if includeBlank {
+		remaining--
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	if remaining > total {
+		remaining = total
+	}
+	return remaining
+}
+
+func (m *Model) branchViewportSize(total int) int {
+	budget := m.panelLineBudget()
+	if budget <= 0 {
+		return 0
+	}
+	// instructions line
+	remaining := budget - 1
+	if remaining <= 0 {
+		return 0
+	}
+	includeBlank := remaining > 1 && total > 0
+	if includeBlank {
+		remaining--
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	if remaining > total {
+		remaining = total
+	}
+	return remaining
+}
+
+func (m *Model) ensureBranchCursorVisible(total, viewport int) {
+	if total <= 0 {
+		m.branchCursor = 0
+		m.branchOffset = 0
+		return
+	}
+	if m.branchCursor < 0 {
+		m.branchCursor = 0
+	}
+	if m.branchCursor >= total {
+		m.branchCursor = total - 1
+	}
+	if viewport <= 0 {
+		m.branchOffset = 0
+		return
+	}
+	if m.branchOffset < 0 {
+		m.branchOffset = 0
+	}
+	maxOffset := total - viewport
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.branchOffset > maxOffset {
+		m.branchOffset = maxOffset
+	}
+	if m.branchCursor < m.branchOffset {
+		m.branchOffset = m.branchCursor
+	} else if m.branchCursor >= m.branchOffset+viewport {
+		m.branchOffset = m.branchCursor - viewport + 1
+	}
+}
+
+func (m *Model) remoteViewportSize(total int) int {
+	budget := m.panelLineBudget()
+	if budget <= 0 {
+		return 0
+	}
+	remaining := budget - 1
+	if remaining <= 0 {
+		return 0
+	}
+	includeBlank := remaining > 1 && total > 0
+	if includeBlank {
+		remaining--
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	if remaining > total {
+		remaining = total
+	}
+	return remaining
+}
+
+func (m *Model) ensureRemoteCursorVisible(total, viewport int) {
+	if total <= 0 {
+		m.remoteBranchCursor = 0
+		m.remoteOffset = 0
+		return
+	}
+	if m.remoteBranchCursor < 0 {
+		m.remoteBranchCursor = 0
+	}
+	if m.remoteBranchCursor >= total {
+		m.remoteBranchCursor = total - 1
+	}
+	if viewport <= 0 {
+		m.remoteOffset = 0
+		return
+	}
+	if m.remoteOffset < 0 {
+		m.remoteOffset = 0
+	}
+	maxOffset := total - viewport
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.remoteOffset > maxOffset {
+		m.remoteOffset = maxOffset
+	}
+	if m.remoteBranchCursor < m.remoteOffset {
+		m.remoteOffset = m.remoteBranchCursor
+	} else if m.remoteBranchCursor >= m.remoteOffset+viewport {
+		m.remoteOffset = m.remoteBranchCursor - viewport + 1
+	}
 }
 
 func runJobQueueCmd(queue *job.Queue, resetMainQueue bool) tea.Cmd {
@@ -1163,12 +1548,30 @@ func (m *Model) sortByTime() {
 	sort.Sort(git.LastModified(m.repositories))
 }
 
+func (m *Model) clearSuccessFormatting() {
+	for _, repo := range m.repositories {
+		if repo == nil {
+			continue
+		}
+		if repo.WorkStatus() == git.Success {
+			repo.SetWorkStatus(git.Available)
+		}
+	}
+}
+
 func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
 	items := m.branchPanelItems()
 	count := len(items)
 	if count == 0 {
 		return m, nil
 	}
+	viewport := m.branchViewportSize(count)
+	if viewport <= 0 {
+		viewport = count
+	}
+	m.ensureBranchCursorVisible(count, viewport)
+
+	var cmd tea.Cmd
 
 	switch key {
 	case "up", "k":
@@ -1179,42 +1582,51 @@ func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
 		m.branchCursor = 0
 	case "end", "G":
 		m.branchCursor = count - 1
-	case "enter", "c":
+	case " ", "space", "c":
 		branchName := items[clampIndex(m.branchCursor, count)].Name
 		if branchName == "" || branchName == "<unknown>" {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		if m.hasMultipleTagged() {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, m.checkoutBranchMultiCmd(m.taggedRepositories(), branchName)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		branch := findBranchByName(repos[0], branchName)
-		return m, m.checkoutBranchCmd(repos[0], branch)
+		cmd = m.checkoutBranchCmd(repos[0], branch)
 	case "d":
 		branchName := items[clampIndex(m.branchCursor, count)].Name
 		if branchName == "" || branchName == "<unknown>" {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		if m.hasMultipleTagged() {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, m.deleteBranchMultiCmd(m.taggedRepositories(), branchName)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		repo := repos[0]
 		if repo.State != nil && repo.State.Branch != nil && repo.State.Branch.Name == branchName {
 			repo.State.Message = "cannot delete current branch"
+			m.ensureBranchCursorVisible(count, viewport)
 			return m, nil
 		}
 		branch := findBranchByName(repo, branchName)
-		return m, m.deleteBranchCmd(repo, branch)
+		cmd = m.deleteBranchCmd(repo, branch)
 	}
 
-	return m, nil
+	m.ensureBranchCursorVisible(count, viewport)
+
+	return m, cmd
 }
 
 func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
@@ -1223,6 +1635,13 @@ func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
 	if count == 0 {
 		return m, nil
 	}
+	viewport := m.remoteViewportSize(count)
+	if viewport <= 0 {
+		viewport = count
+	}
+	m.ensureRemoteCursorVisible(count, viewport)
+
+	var cmd tea.Cmd
 
 	switch key {
 	case "up", "k":
@@ -1233,29 +1652,34 @@ func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
 		m.remoteBranchCursor = 0
 	case "end", "G":
 		m.remoteBranchCursor = count - 1
-	case "enter", "c":
+	case " ", "space", "c":
 		entry := items[clampIndex(m.remoteBranchCursor, count)]
 		if m.hasMultipleTagged() {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, m.checkoutRemoteBranchMultiCmd(m.taggedRepositories(), entry)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, nil
 		}
-		return m, m.checkoutRemoteBranchCmd(repos[0], entry)
+		cmd = m.checkoutRemoteBranchCmd(repos[0], entry)
 	case "d":
 		entry := items[clampIndex(m.remoteBranchCursor, count)]
 		if m.hasMultipleTagged() {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, m.deleteRemoteBranchMultiCmd(m.taggedRepositories(), entry)
 		}
 		repos := m.panelRepositories()
 		if len(repos) == 0 {
+			m.ensureRemoteCursorVisible(count, viewport)
 			return m, nil
 		}
-		return m, m.deleteRemoteBranchCmd(repos[0], entry)
+		cmd = m.deleteRemoteBranchCmd(repos[0], entry)
 	}
 
-	return m, nil
+	m.ensureRemoteCursorVisible(count, viewport)
+	return m, cmd
 }
 
 func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
@@ -1280,7 +1704,7 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 	if count == 0 {
 		return m, nil
 	}
-	viewport := m.commitViewportSize()
+	viewport := m.commitViewportSize(count)
 	if viewport > count {
 		viewport = count
 	}
@@ -1288,22 +1712,28 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "up", "k":
 		wrapCursor(&m.commitCursor, count, -1)
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "down", "j":
 		wrapCursor(&m.commitCursor, count, 1)
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "home", "g":
 		m.commitCursor = 0
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "end", "G":
 		m.commitCursor = count - 1
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+f", "pgdown":
 		m.commitCursor += viewport
 		if m.commitCursor >= count {
 			m.commitCursor = count - 1
 		}
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+b", "pgup":
 		m.commitCursor -= viewport
 		if m.commitCursor < 0 {
 			m.commitCursor = 0
 		}
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+d":
 		half := viewport / 2
 		if half < 1 {
@@ -1313,6 +1743,7 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 		if m.commitCursor >= count {
 			m.commitCursor = count - 1
 		}
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
 	case "ctrl+u":
 		half := viewport / 2
 		if half < 1 {
@@ -1322,7 +1753,16 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 		if m.commitCursor < 0 {
 			m.commitCursor = 0
 		}
-	case "enter", "c":
+		m.resetCommitDetailScrollForIndex(repo, commits, clampIndex(m.commitCursor, count))
+	case "right", "l":
+		if m.adjustCommitDetailScroll(1) {
+			return m, nil
+		}
+	case "left":
+		if m.adjustCommitDetailScroll(-1) {
+			return m, nil
+		}
+	case " ", "space", "c":
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.checkoutCommitCmd(repo, commit)
 	case "s":
@@ -1332,6 +1772,9 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.resetToCommitCmd(repo, commit, command.ResetMixed)
 	case "h":
+		if m.adjustCommitDetailScroll(-1) {
+			return m, nil
+		}
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.resetToCommitCmd(repo, commit, command.ResetHard)
 	}
@@ -1364,6 +1807,11 @@ func (m *Model) activatePanel(panel SidePanelType) {
 				break
 			}
 		}
+		viewport := m.branchViewportSize(len(items))
+		if viewport <= 0 {
+			viewport = len(items)
+		}
+		m.ensureBranchCursorVisible(len(items), viewport)
 	case RemotePanel:
 		items := m.remotePanelItems()
 		currentFull := ""
@@ -1376,19 +1824,26 @@ func (m *Model) activatePanel(panel SidePanelType) {
 				break
 			}
 		}
+		viewport := m.remoteViewportSize(len(items))
+		if viewport <= 0 {
+			viewport = len(items)
+		}
+		m.ensureRemoteCursorVisible(len(items), viewport)
 	case CommitPanel:
 		if repo != nil && repo.State != nil && repo.State.Branch != nil {
+			m.resetAllCommitDetailScroll(repo)
 			if len(repo.State.Branch.Commits) == 0 {
 				_ = repo.State.Branch.InitializeCommits(repo)
 			}
-			if len(repo.State.Branch.Commits) > 0 {
+			total := len(repo.State.Branch.Commits)
+			if total > 0 {
 				m.commitOffset = 0
-				m.commitCursor = clampIndex(m.commitCursor, len(repo.State.Branch.Commits))
-				viewport := m.commitViewportSize()
-				if viewport > len(repo.State.Branch.Commits) {
-					viewport = len(repo.State.Branch.Commits)
+				m.commitCursor = clampIndex(m.commitCursor, total)
+				viewport := m.commitViewportSize(total)
+				if viewport > total {
+					viewport = total
 				}
-				m.ensureCommitCursorVisible(len(repo.State.Branch.Commits), viewport)
+				m.ensureCommitCursorVisible(total, viewport)
 			}
 		}
 	}
@@ -1401,9 +1856,19 @@ func (m *Model) ensureSelectionWithinBounds(panel SidePanelType) {
 	case BranchPanel:
 		length := len(m.branchPanelItems())
 		m.branchCursor = clampIndex(m.branchCursor, length)
+		viewport := m.branchViewportSize(length)
+		if viewport <= 0 {
+			viewport = length
+		}
+		m.ensureBranchCursorVisible(length, viewport)
 	case RemotePanel:
 		length := len(m.remotePanelItems())
 		m.remoteBranchCursor = clampIndex(m.remoteBranchCursor, length)
+		viewport := m.remoteViewportSize(length)
+		if viewport <= 0 {
+			viewport = length
+		}
+		m.ensureRemoteCursorVisible(length, viewport)
 	case CommitPanel:
 		repo := m.currentRepository()
 		length := 0
@@ -1411,7 +1876,7 @@ func (m *Model) ensureSelectionWithinBounds(panel SidePanelType) {
 			length = len(repo.State.Branch.Commits)
 		}
 		m.commitCursor = clampIndex(m.commitCursor, length)
-		viewport := m.commitViewportSize()
+		viewport := m.commitViewportSize(length)
 		if viewport > length {
 			viewport = length
 		}
@@ -1692,18 +2157,6 @@ func (m *Model) resetToCommitCmd(repo *git.Repository, commit *git.Commit, reset
 		}
 		return repoActionResultMsg{panel: CommitPanel}
 	}
-}
-
-func (m *Model) commitViewportSize() int {
-	height := m.height
-	if height <= 0 {
-		height = 24
-	}
-	viewport := height - 8
-	if viewport < 1 {
-		viewport = 1
-	}
-	return viewport
 }
 
 func (m *Model) ensureCommitCursorVisible(total, viewport int) {
