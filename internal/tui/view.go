@@ -202,7 +202,7 @@ func clampInt(value, min, max int) int {
 
 // renderTableBorder renders a horizontal border for the table
 // Example: "┌────────────┬────────────┬────────────┐"
-func (m *Model) renderTableBorder(colWidths columnWidths, borderType string) string {
+func (m *Model) renderTableBorder(colWidths columnWidths, borderType string, label string) string {
 	var left, mid, right, horiz string
 	switch borderType {
 	case "top":
@@ -213,13 +213,79 @@ func (m *Model) renderTableBorder(colWidths columnWidths, borderType string) str
 		left, mid, right, horiz = "├", "┼", "┤", "─"
 	}
 
-	border := left +
-		strings.Repeat(horiz, colWidths.repo) + mid +
-		strings.Repeat(horiz, colWidths.branch) + mid +
-		strings.Repeat(horiz, colWidths.commitMsg) +
-		right
+	repoSeg := borderSegmentWithLeftLabel(colWidths.repo, horiz, label)
+	branchSeg := strings.Repeat(horiz, colWidths.branch)
+	commitSeg := strings.Repeat(horiz, colWidths.commitMsg)
+
+	border := left + repoSeg + mid + branchSeg + mid + commitSeg + right
 
 	return m.styles.TableBorder.Render(border)
+}
+
+func borderSegmentWithLeftLabel(width int, horiz, label string) string {
+	if width <= 0 {
+		return ""
+	}
+	if label == "" {
+		return strings.Repeat(horiz, width)
+	}
+	decorated := "(" + label + ")"
+	fitted := fitStringToWidth(decorated, width-3)
+	if fitted == "" {
+		return strings.Repeat(horiz, width)
+	}
+	labelWidth := lipgloss.Width(fitted)
+	padding := width - labelWidth
+	if padding < 3 {
+		padding = 3
+	}
+	leftPad := 3
+	rightPad := padding - leftPad
+	if rightPad < 0 {
+		rightPad = 0
+	}
+	if leftPad+labelWidth+rightPad < width {
+		rightPad = width - (leftPad + labelWidth)
+	}
+	if leftPad+labelWidth+rightPad > width {
+		// trim to fit exactly if rounding issues
+		diff := leftPad + labelWidth + rightPad - width
+		if rightPad >= diff {
+			rightPad -= diff
+		} else if leftPad >= diff {
+			leftPad -= diff
+		} else {
+			fitted = fitStringToWidth(fitted, width-leftPad-rightPad)
+			labelWidth = lipgloss.Width(fitted)
+			if leftPad+labelWidth+rightPad > width {
+				rightPad = width - (leftPad + labelWidth)
+				if rightPad < 0 {
+					rightPad = 0
+				}
+			}
+		}
+	}
+	return strings.Repeat(horiz, leftPad) + fitted + strings.Repeat(horiz, rightPad)
+}
+
+func fitStringToWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	var b strings.Builder
+	current := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if current+rw > width {
+			break
+		}
+		b.WriteRune(r)
+		current += rw
+	}
+	return b.String()
 }
 
 // View renders the UI
@@ -342,8 +408,16 @@ func (m *Model) renderOverview() string {
 	}
 	title := m.styles.Title.Width(m.width).Render(titleText)
 
+	var topLabel, bottomLabel string
+	if startIdx > 0 {
+		topLabel = "↑ more above"
+	}
+	if endIdx < len(m.repositories) {
+		bottomLabel = "↓ more below"
+	}
+
 	// Top border for table
-	topBorder := m.renderTableBorder(colWidths, "top")
+	topBorder := m.renderTableBorder(colWidths, "top", topLabel)
 
 	// Render repositories
 	var lines []string
@@ -352,16 +426,6 @@ func (m *Model) renderOverview() string {
 		selected := i == m.cursor
 		line := m.renderRepositoryLine(r, selected, colWidths)
 		lines = append(lines, line)
-	}
-
-	// Add scroll indicators
-	if startIdx > 0 {
-		scrollUp := m.styles.Help.Render("  ↑ more above")
-		lines = append([]string{scrollUp}, lines...)
-	}
-	if endIdx < len(m.repositories) {
-		scrollDown := m.styles.Help.Render("  ↓ more below")
-		lines = append(lines, scrollDown)
 	}
 
 	// Fill remaining rows with empty table rows to stretch to full height
@@ -377,7 +441,7 @@ func (m *Model) renderOverview() string {
 	}
 
 	// Bottom border for table
-	bottomBorder := m.renderTableBorder(colWidths, "bottom")
+	bottomBorder := m.renderTableBorder(colWidths, "bottom", bottomLabel)
 
 	list := strings.Join(lines, "\n")
 
