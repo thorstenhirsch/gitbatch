@@ -107,10 +107,10 @@ const (
 )
 
 var (
-	pullMode   = Mode{ID: PullMode, DisplayString: "Pull (ff-only)", CommandString: "pull --ff-only"}
-	mergeMode  = Mode{ID: MergeMode, DisplayString: "Merge", CommandString: "merge"}
-	rebaseMode = Mode{ID: RebaseMode, DisplayString: "Rebase", CommandString: "pull --rebase"}
-	pushMode   = Mode{ID: PushMode, DisplayString: "Push", CommandString: "push"}
+	pullMode   = Mode{ID: PullMode, DisplayString: "Pull | m: switch", CommandString: "pull --ff-only"}
+	mergeMode  = Mode{ID: MergeMode, DisplayString: "Merge | m: switch", CommandString: "merge"}
+	rebaseMode = Mode{ID: RebaseMode, DisplayString: "Rebase | m: switch", CommandString: "pull --rebase"}
+	pushMode   = Mode{ID: PushMode, DisplayString: "Push | m: switch", CommandString: "push"}
 
 	modes = []Mode{pullMode, mergeMode, rebaseMode, pushMode}
 )
@@ -118,7 +118,6 @@ var (
 var spinnerFrames = []string{"|", "/", "-", "\\"}
 
 var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#42A5F5"}
-var tagWarningColor = lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
