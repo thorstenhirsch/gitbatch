@@ -41,6 +41,6 @@ func TestPush(t *testing.T) {
 		CommandMode:   ModeLegacy,
 	}
 
-	err = Push(th.Repository, opts)
+	_, err = Push(th.Repository, opts)
 	require.NoError(t, err)
 }

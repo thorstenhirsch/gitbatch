@@ -17,7 +17,7 @@ type PushOptions struct {
 	CommandMode Mode
 }
 
-func Push(r *git.Repository, options *PushOptions) error {
+func Push(r *git.Repository, options *PushOptions) (string, error) {
 	if options == nil {
 		options = &PushOptions{}
 	}
@@ -45,9 +45,10 @@ func Push(r *git.Repository, options *PushOptions) error {
 	}
 	out, err := Run(r.AbsPath, "git", args)
 	if err != nil {
-		return gerr.ParseGitError(out, err)
+		return "", gerr.ParseGitError(out, err)
 	}
-	r.SetWorkStatus(git.Success)
-	r.State.Message = "push completed"
-	return r.Refresh()
+	if err := r.ForceRefresh(); err != nil {
+		return "", err
+	}
+	return "push completed", nil
 }

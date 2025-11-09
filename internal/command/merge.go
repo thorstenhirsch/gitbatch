@@ -3,6 +3,7 @@ package command
 import (
 	"regexp"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
@@ -21,7 +22,7 @@ type MergeOptions struct {
 
 // Merge incorporates changes from the named commits or branches into the
 // current branch
-func Merge(r *git.Repository, options *MergeOptions) error {
+func Merge(r *git.Repository, options *MergeOptions) (string, error) {
 
 	args := make([]string, 0)
 	args = append(args, "merge")
@@ -37,17 +38,26 @@ func Merge(r *git.Repository, options *MergeOptions) error {
 
 	ref, _ := r.Repo.Head()
 	if out, err := Run(r.AbsPath, "git", args); err != nil {
-		return gerr.ParseGitError(out, err)
+		return "", gerr.ParseGitError(out, err)
 	}
 
 	newref, _ := r.Repo.Head()
-	r.SetWorkStatus(git.Success)
-	msg, err := getMergeMessage(r, ref.Hash().String(), newref.Hash().String())
+	if err := r.ForceRefresh(); err != nil {
+		return "", err
+	}
+
+	msg, err := getMergeMessage(r, mergeReferenceHash(ref), mergeReferenceHash(newref))
 	if err != nil {
 		msg = "couldn't get stat"
 	}
-	r.State.Message = msg
-	return r.Refresh()
+	return msg, nil
+}
+
+func mergeReferenceHash(ref *plumbing.Reference) string {
+	if ref == nil {
+		return ""
+	}
+	return ref.Hash().String()
 }
 
 func getMergeMessage(r *git.Repository, ref1, ref2 string) (string, error) {

@@ -93,14 +93,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		repo := msg.repo
 		if repo != nil {
 			if msg.err != nil {
-				repo.MarkCriticalError(msg.err.Error())
-			} else if repo.State != nil && repo.State.RecoverableError {
-				repo.SetWorkStatus(git.Fail)
+				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+					Operation: command.OperationRefresh,
+					Err:       msg.err,
+				})
 			} else {
-				repo.SetWorkStatus(git.Available)
-				if repo.State != nil {
-					repo.State.Message = ""
-				}
+				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+					Operation: command.OperationRefresh,
+				})
 			}
 		}
 		if m.updateJobsRunningFlag() {
@@ -1141,7 +1141,8 @@ func (m *Model) maybeStartInitialFetch(repos []*git.Repository) tea.Cmd {
 func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 	return func() tea.Msg {
 		queue := job.CreateJobQueue()
-		failures := make([]string, 0)
+		failureSet := make(map[string]struct{})
+		failedRepoIDs := make(map[string]struct{})
 		for _, repo := range repos {
 			opts := &command.FetchOptions{
 				RemoteName:  defaultRemoteName(repo),
@@ -1153,14 +1154,15 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 				Repository: repo,
 				Options:    opts,
 			}); err != nil {
-				repo.SetWorkStatus(git.Fail)
-				if repo.State != nil {
-					repo.State.Message = err.Error()
-					if repo.State.Branch != nil {
-						repo.State.Branch.Clean = false
-					}
-				}
-				failures = append(failures, repo.Name)
+				failureSet[repo.Name] = struct{}{}
+				failedRepoIDs[repo.RepoID] = struct{}{}
+				recoverable := true
+				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+					Operation:           command.OperationFetch,
+					Err:                 err,
+					Message:             err.Error(),
+					RecoverableOverride: &recoverable,
+				})
 				continue
 			}
 		}
@@ -1170,9 +1172,42 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 			if j == nil || j.Repository == nil {
 				continue
 			}
-			failures = append(failures, j.Repository.Name)
+			failureSet[j.Repository.Name] = struct{}{}
+			failedRepoIDs[j.Repository.RepoID] = struct{}{}
 		}
-		if len(failures) > 0 {
+
+		successRepos := make([]*git.Repository, 0, len(repos))
+		for _, repo := range repos {
+			if repo == nil {
+				continue
+			}
+			if _, failed := failedRepoIDs[repo.RepoID]; failed {
+				continue
+			}
+			successRepos = append(successRepos, repo)
+		}
+
+		for _, repo := range successRepos {
+			if err := repo.ForceRefresh(); err != nil {
+				failureSet[repo.Name] = struct{}{}
+				failedRepoIDs[repo.RepoID] = struct{}{}
+				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+					Operation: command.OperationRefresh,
+					Err:       err,
+				})
+				continue
+			}
+			command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+				Operation: command.OperationRefresh,
+				Message:   repo.State.Message,
+			})
+		}
+
+		if len(failureSet) > 0 {
+			failures := make([]string, 0, len(failureSet))
+			for name := range failureSet {
+				failures = append(failures, name)
+			}
 			sort.Strings(failures)
 			return autoFetchFailedMsg{names: failures}
 		}

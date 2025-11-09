@@ -21,7 +21,7 @@ func TestMerge(t *testing.T) {
 		{th.Repository, opts},
 	}
 	for _, test := range tests {
-		err := Merge(test.inp1, test.inp2)
+		_, err := Merge(test.inp1, test.inp2)
 		require.NoError(t, err)
 	}
 }

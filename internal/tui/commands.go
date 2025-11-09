@@ -6,7 +6,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/thorstenhirsch/gitbatch/internal/command"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/load"
 )
@@ -50,7 +49,6 @@ func refreshRepoStateCmd(repo *git.Repository) tea.Cmd {
 		if err := repo.ForceRefresh(); err != nil {
 			return repoRefreshResultMsg{repo: repo, err: err}
 		}
-		command.ReevaluateRepositoryState(repo)
 		return repoRefreshResultMsg{repo: repo}
 	}
 }

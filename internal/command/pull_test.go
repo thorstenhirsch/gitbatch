@@ -35,7 +35,7 @@ func TestPullWithGit(t *testing.T) {
 		{th.Repository, testPullopts2},
 	}
 	for _, test := range tests {
-		err := pullWithGit(test.inp1, test.inp2)
+		_, err := pullWithGit(test.inp1, test.inp2)
 		require.NoError(t, err)
 	}
 }
@@ -52,7 +52,7 @@ func TestPullWithGoGit(t *testing.T) {
 		{th.Repository, testPullopts3},
 	}
 	for _, test := range tests {
-		err := pullWithGoGit(test.inp1, test.inp2)
+		_, err := pullWithGoGit(test.inp1, test.inp2)
 		require.NoError(t, err)
 	}
 }

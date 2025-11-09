@@ -42,11 +42,11 @@ type PullOptions struct {
 }
 
 // Pull incorporates changes from a remote repository into the current branch.
-func Pull(r *git.Repository, o *PullOptions) (err error) {
+func Pull(r *git.Repository, o *PullOptions) (string, error) {
 	pullTryCount = 0
 
 	if o == nil {
-		return nil
+		return "", nil
 	}
 
 	// here we configure pull operation
@@ -56,16 +56,14 @@ func Pull(r *git.Repository, o *PullOptions) (err error) {
 
 	switch o.CommandMode {
 	case ModeLegacy:
-		err = pullWithGit(r, o)
-		return err
+		return pullWithGit(r, o)
 	case ModeNative:
-		err = pullWithGoGit(r, o)
-		return err
+		return pullWithGoGit(r, o)
 	}
-	return nil
+	return "", nil
 }
 
-func pullWithGit(r *git.Repository, options *PullOptions) (err error) {
+func pullWithGit(r *git.Repository, options *PullOptions) (string, error) {
 	args := make([]string, 0)
 	args = append(args, "pull")
 	// parse options to command line arguments
@@ -86,19 +84,21 @@ func pullWithGit(r *git.Repository, options *PullOptions) (err error) {
 	}
 	ref, _ := r.Repo.Head()
 	if out, err := Run(r.AbsPath, "git", args); err != nil {
-		return gerr.ParseGitError(out, err)
+		return "", gerr.ParseGitError(out, err)
 	}
 	newref, _ := r.Repo.Head()
-	r.SetWorkStatus(git.Success)
-	msg, err := getMergeMessage(r, ref.Hash().String(), newref.Hash().String())
+	if err := r.ForceRefresh(); err != nil {
+		return "", err
+	}
+
+	msg, err := getMergeMessage(r, referenceHash(ref), referenceHash(newref))
 	if err != nil {
 		msg = "couldn't get stat"
 	}
-	r.State.Message = msg
-	return r.Refresh()
+	return msg, nil
 }
 
-func pullWithGoGit(r *git.Repository, options *PullOptions) (err error) {
+func pullWithGoGit(r *git.Repository, options *PullOptions) (string, error) {
 	if options.FFOnly || options.Rebase {
 		return pullWithGit(r, options)
 	}
@@ -116,7 +116,7 @@ func pullWithGoGit(r *git.Repository, options *PullOptions) (err error) {
 	if options.Credentials != nil {
 		protocol, err := git.AuthProtocol(r.State.Remote)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if protocol == git.AuthProtocolHTTP || protocol == git.AuthProtocolHTTPS {
 			opt.Auth = &http.BasicAuth{
@@ -124,7 +124,7 @@ func pullWithGoGit(r *git.Repository, options *PullOptions) (err error) {
 				Password: options.Credentials.Password,
 			}
 		} else {
-			return gerr.ErrInvalidAuthMethod
+			return "", gerr.ErrInvalidAuthMethod
 		}
 	}
 	if options.Progress {
@@ -132,7 +132,7 @@ func pullWithGoGit(r *git.Repository, options *PullOptions) (err error) {
 	}
 	w, err := r.Repo.Worktree()
 	if err != nil {
-		return err
+		return "", err
 	}
 	ref, _ := r.Repo.Head()
 	if err = w.Pull(opt); err != nil {
@@ -140,30 +140,46 @@ func pullWithGoGit(r *git.Repository, options *PullOptions) (err error) {
 			// log.Error("error: " + err.Error())
 			// Already up-to-date
 			// TODO: submit a PR for this kind of error, this type of catch is lame
+			if errRefresh := r.ForceRefresh(); errRefresh != nil {
+				return "", errRefresh
+			}
+			msg, msgErr := getMergeMessage(r, referenceHash(ref), referenceHash(ref))
+			if msgErr != nil {
+				msg = "couldn't get stat"
+			}
+			return msg, nil
 		} else if err == storage.ErrReferenceHasChanged && pullTryCount < pullMaxTry {
 			pullTryCount++
-			if err := Fetch(r, &FetchOptions{
+			if _, err := Fetch(r, &FetchOptions{
 				RemoteName: options.RemoteName,
 			}); err != nil {
-				return err
+				return "", err
 			}
 			return Pull(r, options)
 		} else if strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
 			// The env variable SSH_AUTH_SOCK is not defined, maybe git can handle this
 			return pullWithGit(r, options)
 		} else if err == transport.ErrAuthenticationRequired {
-			return gerr.ErrAuthenticationRequired
+			return "", gerr.ErrAuthenticationRequired
 		} else {
 			return pullWithGit(r, options)
 		}
 	}
 	newref, _ := r.Repo.Head()
+	if err := r.ForceRefresh(); err != nil {
+		return "", err
+	}
 
-	msg, err := getMergeMessage(r, ref.Hash().String(), newref.Hash().String())
-	if err != nil {
+	msg, errMsg := getMergeMessage(r, referenceHash(ref), referenceHash(newref))
+	if errMsg != nil {
 		msg = "couldn't get stat"
 	}
-	r.SetWorkStatus(git.Success)
-	r.State.Message = msg
-	return r.Refresh()
+	return msg, nil
+}
+
+func referenceHash(ref *plumbing.Reference) string {
+	if ref == nil {
+		return ""
+	}
+	return ref.Hash().String()
 }

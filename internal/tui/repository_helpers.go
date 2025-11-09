@@ -3,6 +3,7 @@ package tui
 import (
 	"slices"
 
+	"github.com/thorstenhirsch/gitbatch/internal/command"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -22,10 +23,30 @@ func refreshBranchState(repo *git.Repository) error {
 		return nil
 	}
 	if err := repo.ForceRefresh(); err != nil {
+		command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+			Operation: command.OperationRefresh,
+			Err:       err,
+			Message:   err.Error(),
+		})
 		return err
 	}
 	if state := repo.State; state != nil && state.Branch != nil {
-		_ = state.Branch.InitializeCommits(repo)
+		if err := state.Branch.InitializeCommits(repo); err != nil {
+			command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+				Operation: command.OperationRefresh,
+				Err:       err,
+				Message:   err.Error(),
+			})
+			return err
+		}
 	}
+	message := ""
+	if repo.State != nil {
+		message = repo.State.Message
+	}
+	command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+		Operation: command.OperationRefresh,
+		Message:   message,
+	})
 	return nil
 }

@@ -4,12 +4,159 @@ import (
 	"fmt"
 	"strings"
 
+	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
-// ReevaluateRepositoryState recomputes derived repository state after operations that
-// may have modified the working tree outside gitbatch (e.g. fetch, lazygit).
-func ReevaluateRepositoryState(r *git.Repository) {
+func init() {
+	git.RegisterRepositoryHook(AttachStateEvaluator)
+}
+
+// OperationType identifies the job or action that updated a repository.
+type OperationType string
+
+const (
+	OperationFetch   OperationType = "fetch"
+	OperationPull    OperationType = "pull"
+	OperationMerge   OperationType = "merge"
+	OperationRebase  OperationType = "rebase"
+	OperationPush    OperationType = "push"
+	OperationRefresh OperationType = "refresh"
+)
+
+// OperationOutcome captures the result of an operation for state evaluation.
+type OperationOutcome struct {
+	Operation           OperationType
+	Err                 error
+	Message             string
+	SuppressSuccess     bool
+	RecoverableOverride *bool
+}
+
+// EvaluateRepositoryState centralises repository state transitions after an operation.
+// It is invoked after auto-fetch, queued jobs, and lazygit refreshes to ensure
+// consistent clean/dirty and error handling across the application.
+func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
+	if r == nil || r.State == nil {
+		return
+	}
+
+	if outcome.Err != nil {
+		recoverable := false
+		if outcome.RecoverableOverride != nil {
+			recoverable = *outcome.RecoverableOverride
+		} else {
+			recoverable = gerr.IsRecoverable(outcome.Err)
+		}
+		message := strings.TrimSpace(outcome.Message)
+		if message == "" {
+			message = git.NormalizeGitErrorMessage(outcome.Err.Error())
+		}
+		if recoverable {
+			r.MarkRecoverableError(message)
+		} else {
+			r.MarkCriticalError(message)
+		}
+		return
+	}
+
+	applySuccessState(r, outcome)
+	applyCleanliness(r)
+}
+
+// AttachStateEvaluator wires repository events to the state evaluator.
+func AttachStateEvaluator(r *git.Repository) {
+	if r == nil {
+		return
+	}
+	r.On(git.RepositoryEvaluationRequested, func(event *git.RepositoryEvent) error {
+		if event == nil {
+			return nil
+		}
+		var outcome OperationOutcome
+		switch payload := event.Data.(type) {
+		case OperationOutcome:
+			outcome = payload
+		case *OperationOutcome:
+			if payload != nil {
+				outcome = *payload
+			}
+		default:
+			return nil
+		}
+		EvaluateRepositoryState(r, outcome)
+		return nil
+	})
+}
+
+// ScheduleStateEvaluation emits an event-driven request to recompute repository state.
+func ScheduleStateEvaluation(r *git.Repository, outcome OperationOutcome) {
+	if r == nil {
+		return
+	}
+	_ = r.Publish(git.RepositoryEvaluationRequested, outcome)
+}
+
+func applySuccessState(r *git.Repository, outcome OperationOutcome) {
+	if r.State == nil {
+		return
+	}
+
+	// Reset recoverable flag on success paths.
+	r.State.RecoverableError = false
+
+	message := strings.TrimSpace(outcome.Message)
+
+	switch outcome.Operation {
+	case OperationFetch:
+		r.SetWorkStatus(git.Available)
+		r.State.Message = message
+	case OperationPull:
+		if outcome.SuppressSuccess {
+			r.SetWorkStatus(git.Available)
+		} else {
+			r.SetWorkStatus(git.Success)
+		}
+		if message == "" {
+			r.State.Message = "pull completed"
+		} else {
+			r.State.Message = message
+		}
+	case OperationMerge:
+		r.SetWorkStatus(git.Success)
+		if message == "" {
+			r.State.Message = "merge completed"
+		} else {
+			r.State.Message = message
+		}
+	case OperationRebase:
+		r.SetWorkStatus(git.Success)
+		if message == "" {
+			r.State.Message = "rebase completed"
+		} else {
+			r.State.Message = message
+		}
+	case OperationPush:
+		if outcome.SuppressSuccess {
+			r.SetWorkStatus(git.Available)
+		} else {
+			r.SetWorkStatus(git.Success)
+		}
+		if message == "" {
+			r.State.Message = "push completed"
+		} else {
+			r.State.Message = message
+		}
+	case OperationRefresh:
+		r.SetWorkStatus(git.Available)
+		r.State.Message = message
+	default:
+		r.SetWorkStatus(git.Available)
+		r.State.Message = message
+	}
+}
+
+func applyCleanliness(r *git.Repository) {
 	if r == nil || r.State == nil || r.State.Branch == nil {
 		return
 	}
@@ -19,11 +166,20 @@ func ReevaluateRepositoryState(r *git.Repository) {
 	if branch.HasIncomingCommits() {
 		upstream := branch.Upstream
 		if upstream == nil || upstream.Name == "" {
+			r.MarkRecoverableError("upstream not configured")
 			return
 		}
-		if fastForwardDryRunSucceeds(r, upstream) {
-			r.MarkClean()
+		succeeds, err := fastForwardDryRunSucceeds(r, upstream)
+		if err != nil {
+			r.MarkRecoverableError(fmt.Sprintf("unable to verify fast-forward: %v", err))
+			return
 		}
+		if succeeds {
+			r.MarkClean()
+			return
+		}
+		// Remote has incoming commits with local divergence; keep dirty state to surface conflicts.
+		r.MarkDirty()
 		return
 	}
 
@@ -106,9 +262,9 @@ func upstreamExistsOnRemote(r *git.Repository, remoteName, branchName string) (b
 	return strings.TrimSpace(out) != "", nil
 }
 
-func fastForwardDryRunSucceeds(r *git.Repository, upstream *git.RemoteBranch) bool {
+func fastForwardDryRunSucceeds(r *git.Repository, upstream *git.RemoteBranch) (bool, error) {
 	if r == nil || upstream == nil {
-		return false
+		return false, fmt.Errorf("repository or upstream missing")
 	}
 
 	upstreamRef := upstream.Name
@@ -116,18 +272,18 @@ func fastForwardDryRunSucceeds(r *git.Repository, upstream *git.RemoteBranch) bo
 		upstreamRef = upstream.Reference.Name().String()
 	}
 	if upstreamRef == "" {
-		return false
+		return false, fmt.Errorf("upstream reference not set")
 	}
 
 	headHash, err := Run(r.AbsPath, "git", []string{"rev-parse", "HEAD"})
 	if err != nil {
-		return false
+		return false, err
 	}
 
 	mergeBase, err := Run(r.AbsPath, "git", []string{"merge-base", "HEAD", upstreamRef})
 	if err != nil {
-		return false
+		return false, err
 	}
 
-	return strings.TrimSpace(headHash) != "" && strings.TrimSpace(headHash) == strings.TrimSpace(mergeBase)
+	return strings.TrimSpace(headHash) != "" && strings.TrimSpace(headHash) == strings.TrimSpace(mergeBase), nil
 }

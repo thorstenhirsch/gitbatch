@@ -40,41 +40,101 @@ func operate(directory, mode string) error {
 	}
 	switch mode {
 	case "fetch":
-		return command.Fetch(r, &command.FetchOptions{
+		msg, err := command.Fetch(r, &command.FetchOptions{
 			RemoteName:  remoteName,
 			Progress:    true,
 			CommandMode: command.ModeLegacy,
 			Timeout:     command.DefaultFetchTimeout,
 		})
+		if err != nil {
+			command.ScheduleStateEvaluation(r, command.OperationOutcome{
+				Operation: command.OperationFetch,
+				Err:       err,
+			})
+			return err
+		}
+		command.ScheduleStateEvaluation(r, command.OperationOutcome{
+			Operation: command.OperationFetch,
+			Message:   msg,
+		})
+		return nil
 	case "pull":
-		return command.Pull(r, &command.PullOptions{
+		msg, err := command.Pull(r, &command.PullOptions{
 			RemoteName:    remoteName,
 			Progress:      true,
 			CommandMode:   command.ModeLegacy,
 			ReferenceName: branchNameForQuick(r),
 			FFOnly:        true,
 		})
+		if err != nil {
+			command.ScheduleStateEvaluation(r, command.OperationOutcome{
+				Operation: command.OperationPull,
+				Err:       err,
+			})
+			return err
+		}
+		command.ScheduleStateEvaluation(r, command.OperationOutcome{
+			Operation: command.OperationPull,
+			Message:   msg,
+		})
+		return nil
 	case "merge":
 		if r.State.Branch.Upstream == nil {
 			return fmt.Errorf("upstream not set")
 		}
-		return command.Merge(r, &command.MergeOptions{
+		msg, err := command.Merge(r, &command.MergeOptions{
 			BranchName: r.State.Branch.Upstream.Name,
 		})
+		if err != nil {
+			command.ScheduleStateEvaluation(r, command.OperationOutcome{
+				Operation: command.OperationMerge,
+				Err:       err,
+			})
+			return err
+		}
+		command.ScheduleStateEvaluation(r, command.OperationOutcome{
+			Operation: command.OperationMerge,
+			Message:   msg,
+		})
+		return nil
 	case "rebase":
-		return command.Pull(r, &command.PullOptions{
+		msg, err := command.Pull(r, &command.PullOptions{
 			RemoteName:    remoteName,
 			Progress:      true,
 			CommandMode:   command.ModeLegacy,
 			ReferenceName: branchNameForQuick(r),
 			Rebase:        true,
 		})
+		if err != nil {
+			command.ScheduleStateEvaluation(r, command.OperationOutcome{
+				Operation: command.OperationRebase,
+				Err:       err,
+			})
+			return err
+		}
+		command.ScheduleStateEvaluation(r, command.OperationOutcome{
+			Operation: command.OperationRebase,
+			Message:   msg,
+		})
+		return nil
 	case "push":
-		return command.Push(r, &command.PushOptions{
+		msg, err := command.Push(r, &command.PushOptions{
 			RemoteName:    remoteName,
 			ReferenceName: branchNameForQuick(r),
 			CommandMode:   command.ModeLegacy,
 		})
+		if err != nil {
+			command.ScheduleStateEvaluation(r, command.OperationOutcome{
+				Operation: command.OperationPush,
+				Err:       err,
+			})
+			return err
+		}
+		command.ScheduleStateEvaluation(r, command.OperationOutcome{
+			Operation: command.OperationPush,
+			Message:   msg,
+		})
+		return nil
 	}
 	return fmt.Errorf("unsupported mode: %s", mode)
 }

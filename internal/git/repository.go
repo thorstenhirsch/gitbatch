@@ -80,7 +80,37 @@ const (
 	RepositoryUpdated = "repository.updated"
 	// BranchUpdated defines the topic for an updated branch.
 	BranchUpdated = "branch.updated"
+	// RepositoryEvaluationRequested signals that a repository's state should be re-evaluated.
+	RepositoryEvaluationRequested = "repository.evaluation.requested"
 )
+
+// RepositoryHook represents a function that is executed after a repository has been initialized.
+type RepositoryHook func(*Repository)
+
+var (
+	repositoryHooksMu sync.RWMutex
+	repositoryHooks   []RepositoryHook
+)
+
+// RegisterRepositoryHook registers a hook that will run whenever a repository is created.
+func RegisterRepositoryHook(h RepositoryHook) {
+	if h == nil {
+		return
+	}
+	repositoryHooksMu.Lock()
+	repositoryHooks = append(repositoryHooks, h)
+	repositoryHooksMu.Unlock()
+}
+
+func runRepositoryHooks(r *Repository) {
+	repositoryHooksMu.RLock()
+	defer repositoryHooksMu.RUnlock()
+	for _, hook := range repositoryHooks {
+		if hook != nil {
+			hook(r)
+		}
+	}
+}
 
 // FastInitializeRepo initializes a Repository struct without its belongings.
 func FastInitializeRepo(dir string) (r *Repository, err error) {
@@ -109,6 +139,7 @@ func FastInitializeRepo(dir string) (r *Repository, err error) {
 		mutex:     &sync.RWMutex{},
 		listeners: make(map[string][]RepositoryListener),
 	}
+	runRepositoryHooks(r)
 	return r, nil
 }
 
