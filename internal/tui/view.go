@@ -33,12 +33,6 @@ const (
 	minTerminalHeight = 8
 )
 
-type columnWidths struct {
-	repo      int
-	branch    int
-	commitMsg int
-}
-
 var commonPanelBorderColor = lipgloss.AdaptiveColor{Light: "#FB8C00", Dark: "#FFB74D"}
 
 const (
@@ -64,11 +58,22 @@ func (m *Model) overviewTableBodyHeight() int {
 	return visible + 2
 }
 
+// getColumnWidths returns cached column widths, recalculating only when necessary
+func (m *Model) getColumnWidths() columnWidths {
+	// Check if we need to recalculate
+	if m.cachedWidth != m.width || m.cachedRepoCount != len(m.repositories) {
+		m.cachedColWidths = calculateColumnWidths(m.width, m.repositories)
+		m.cachedWidth = m.width
+		m.cachedRepoCount = len(m.repositories)
+	}
+	return m.cachedColWidths
+}
+
 func (m *Model) overviewTableWidth() int {
 	if m.width <= 0 {
 		return 0
 	}
-	widths := calculateColumnWidths(m.width, m.repositories)
+	widths := m.getColumnWidths()
 	total := widths.repo + widths.branch + widths.commitMsg + 4
 	if total > m.width {
 		total = m.width
@@ -490,8 +495,8 @@ func (m *Model) renderOverview() string {
 		}
 	}
 
-	// Compute column widths based on content and available width
-	colWidths := calculateColumnWidths(m.width, m.repositories)
+	// Compute column widths based on content and available width (cached)
+	colWidths := m.getColumnWidths()
 
 	title := m.renderOverviewTitleBar()
 
@@ -549,6 +554,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	switch status {
 	case git.Pending:
 		statusIcon = waitingSymbol
+		style = m.styles.PendingItem
 	case git.Queued:
 		statusIcon = queuedSymbol
 		style = m.styles.QueuedItem
@@ -570,7 +576,9 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 			style = m.styles.FailedItem
 		}
 	}
-	if dirty && !failed {
+	// Only show dirty symbol when state evaluation is complete (status.Ready).
+	// During evaluation (Working), keep showing the spinner.
+	if dirty && !failed && status.Ready {
 		statusIcon = dirtySymbol
 		style = m.styles.DirtyItem
 	}

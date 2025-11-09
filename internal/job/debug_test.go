@@ -41,7 +41,7 @@ func TestDebugFetchJob(t *testing.T) {
 	require.Nil(t, repo.State.Branch.Upstream.Reference)
 
 	job := &Job{JobType: FetchJob, Repository: repo}
-	require.NoError(t, job.start())
+	require.NoError(t, job.Start())
 
 	require.Eventually(t, func() bool {
 		return repo.WorkStatus() == git.Fail

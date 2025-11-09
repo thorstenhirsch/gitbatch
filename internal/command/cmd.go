@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"os"
@@ -40,14 +41,10 @@ func RunWithContext(ctx context.Context, d string, c string, args []string) (str
 }
 
 // RunWithContextTimeout executes a command with the supplied context and optional timeout.
+
 func RunWithContextTimeout(ctx context.Context, d string, c string, args []string, timeout time.Duration) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, c, args...)
 	if d != "" {
@@ -57,12 +54,46 @@ func RunWithContextTimeout(ctx context.Context, d string, c string, args []strin
 	if runtime.GOOS != "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded && runtime.GOOS != "windows" && cmd.Process != nil {
-		// Best-effort kill of the entire process group in case children are still running
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	if err := cmd.Start(); err != nil {
+		return "", err
 	}
-	return trimTrailingNewline(string(output)), err
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	var timer *time.Timer
+	var timeoutC <-chan time.Time
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		timeoutC = timer.C
+	}
+	select {
+	case err := <-done:
+		if timer != nil {
+			timer.Stop()
+		}
+		return trimTrailingNewline(buf.String()), err
+	case <-ctx.Done():
+		if timer != nil {
+			timer.Stop()
+		}
+		err := <-done
+		if ctx.Err() != nil {
+			return trimTrailingNewline(buf.String()), ctx.Err()
+		}
+		return trimTrailingNewline(buf.String()), err
+	case <-timeoutC:
+		if timer != nil {
+			timer.Stop()
+		}
+		go func() {
+			<-done
+		}()
+		return trimTrailingNewline(buf.String()), context.DeadlineExceeded
+	}
 }
 
 func enrichGitEnv(base []string) []string {

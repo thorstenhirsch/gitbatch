@@ -8,10 +8,37 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thorstenhirsch/gitbatch/internal/command"
-	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/job"
 )
+
+var repositoryUpdateCh = make(chan struct{}, 256)
+
+func listenRepositoryUpdatesCmd() tea.Cmd {
+	return func() tea.Msg {
+		select {
+		case <-repositoryUpdateCh:
+			return repositoryStateChangedMsg{}
+		default:
+			return nil
+		}
+	}
+}
+
+func withListener(cmds ...tea.Cmd) tea.Cmd {
+	cmds = append(cmds, listenRepositoryUpdatesCmd())
+	return tea.Batch(cmds...)
+}
+
+func enqueueRepositoryUpdate(repo *git.Repository) {
+	if repo == nil {
+		return
+	}
+	select {
+	case repositoryUpdateCh <- struct{}{}:
+	default:
+	}
+}
 
 // Update handles all messages and updates the model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -23,93 +50,105 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
-		return m, m.maybeStartInitialFetch(nil)
+		cmd := m.maybeStartInitialStateEvaluation(nil)
+		return m, withListener(cmd)
 
 	case repositoriesLoadedMsg:
-		repos := make([]*git.Repository, 0, len(msg.repos))
+		// Add all loaded repositories to the model
 		for _, repo := range msg.repos {
-			if repo == nil {
-				continue
+			if repo != nil {
+				m.addRepository(repo)
+				if repo.State != nil {
+					repo.State.Message = "waiting"
+				}
+				repo.SetWorkStatus(git.Pending)
 			}
-			repos = append(repos, repo)
-			m.addRepository(repo)
+		}
+		if m.cursor >= len(m.repositories) {
+			m.cursor = len(m.repositories) - 1
 		}
 		m.loading = false
+		// Now that all repos are visible, start the state evaluation
+		cmd := m.maybeStartInitialStateEvaluation(nil)
+		return m, withListener(cmd)
 
-		if cmd := m.maybeStartInitialFetch(repos); cmd != nil {
-			return m, cmd
+	case repositoryLoadedMsg:
+		// This message type is no longer used but kept for compatibility
+		if msg.err != nil {
+			m.err = msg.err
 		}
-		return m, nil
+		if repo := msg.repo; repo != nil {
+			m.addRepository(repo)
+			if repo.State != nil {
+				repo.State.Message = "waiting"
+			}
+			repo.SetWorkStatus(git.Pending)
+			// Don't notify during batch loading - will be handled by state evaluation
+			if m.cursor >= len(m.repositories) {
+				m.cursor = len(m.repositories) - 1
+			}
+		}
+		m.loading = false
+		return m, withListener()
+
+	case repositoryStateChangedMsg:
+		m.updateJobsRunningFlag()
+		// Only schedule the next tick if jobs are still running
+		if m.jobsRunning {
+			return m, withListener(tickCmd())
+		}
+		return m, withListener()
+
+	case repositoriesWaitingMsg:
+		// Initial state evaluation has been scheduled for all repos
+		// Trigger a tick to keep the UI responsive
+		return m, withListener(tickCmd())
 
 	case lazygitClosedMsg:
 		repo := msg.repo
 		if repo != nil {
-			repo.SetWorkStatus(git.Working)
-			if m.updateJobsRunningFlag() {
-				return m, tea.Batch(refreshRepoStateCmd(repo), tickCmd())
+			if repo.State != nil {
+				repo.State.Message = "waiting"
 			}
-			return m, refreshRepoStateCmd(repo)
+			repo.SetWorkStatus(git.Pending)
+			repo.NotifyRepositoryUpdated()
+			command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
+			m.jobsRunning = true
+			return m, withListener(tickCmd())
 		}
 		if m.updateJobsRunningFlag() {
-			return m, tickCmd()
+			return m, withListener(tickCmd())
 		}
-		return m, nil
+		return m, withListener()
 
 	case jobCompletedMsg:
-		m.advanceSpinner()
-		if m.updateJobsRunningFlag() {
-			return m, tickCmd()
+		if m.jobsRunning {
+			m.advanceSpinner()
 		}
-		return m, nil
-
-	case jobQueueResultMsg:
-		if len(msg.failures) > 0 {
-			m.processJobFailures(msg.failures)
+		m.updateJobsRunningFlag()
+		// Only schedule the next tick if jobs are still running
+		if m.jobsRunning {
+			return m, withListener(tickCmd())
 		}
-		if msg.resetMainQueue {
-			m.queue = job.CreateJobQueue()
-		}
-		if m.updateJobsRunningFlag() {
-			return m, tickCmd()
-		}
-		return m, nil
+		return m, withListener()
 
 	case repoActionResultMsg:
 		m.ensureSelectionWithinBounds(msg.panel)
-		return m, nil
+		return m, withListener()
 
 	case errMsg:
 		m.err = msg.err
-		return m, nil
+		return m, withListener()
 
 	case autoFetchFailedMsg:
 		m.jobsRunning = false
 		// Auto-fetch failures are recorded on the affected repositories and should
 		// not pollute the global status bar. Leave m.err untouched so the user only
 		// sees errors when focusing the specific repo.
-		return m, nil
-
-	case repoRefreshResultMsg:
-		repo := msg.repo
-		if repo != nil {
-			if msg.err != nil {
-				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
-					Operation: command.OperationRefresh,
-					Err:       msg.err,
-				})
-			} else {
-				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
-					Operation: command.OperationRefresh,
-				})
-			}
-		}
-		if m.updateJobsRunningFlag() {
-			return m, tickCmd()
-		}
-		return m, nil
+		return m, withListener()
 	}
 
-	return m, nil
+	return m, withListener()
 } // handleKeyPress processes keyboard input
 func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
@@ -368,17 +407,16 @@ func (m *Model) retryCredentialPrompt(prompt *credentialPrompt) tea.Cmd {
 		return nil
 	}
 	retryJob.Repository = repo
-	queue := job.CreateJobQueue()
-	if err := queue.AddJob(retryJob); err != nil {
+	if err := retryJob.Start(); err != nil {
 		repo.SetWorkStatus(git.Fail)
 		if repo.State != nil {
-			repo.State.Message = "failed to queue credential retry"
+			repo.State.Message = "failed to start credential retry"
 		}
 		return func() tea.Msg { return errMsg{err: err} }
 	}
 	repo.SetWorkStatus(git.Queued)
 	m.jobsRunning = true
-	return tea.Batch(runJobQueueCmd(queue, false), tickCmd())
+	return tickCmd()
 }
 
 func cloneJobWithCredentials(original *job.Job, creds *git.Credentials) *job.Job {
@@ -693,11 +731,11 @@ func (m *Model) addRepository(r *git.Repository) {
 
 	// Add listeners
 	r.On(git.RepositoryUpdated, func(event *git.RepositoryEvent) error {
-		// Repository updated - could trigger a re-render if needed
+		enqueueRepositoryUpdate(r)
 		return nil
 	})
 	r.On(git.BranchUpdated, func(event *git.RepositoryEvent) error {
-		// Branch updated - could trigger a re-render if needed
+		enqueueRepositoryUpdate(r)
 		return nil
 	})
 
@@ -773,26 +811,6 @@ func repoIsActionable(repo *git.Repository) bool {
 		return false
 	}
 	return repo.State.Branch.Clean
-}
-
-func (m *Model) processJobFailures(fails map[*job.Job]error) {
-	for j, err := range fails {
-		if err == nil {
-			continue
-		}
-		if err == gerr.ErrAuthenticationRequired || err == gerr.ErrAuthorizationFailed {
-			j.Repository.SetWorkStatus(git.Paused)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "credentials required"
-			}
-			m.enqueueCredentialPrompt(j)
-			continue
-		}
-		if j.JobType == job.PushJob {
-			j.Repository.SetWorkStatus(git.Fail)
-			m.enqueueForcePrompt(j.Repository)
-		}
-	}
 }
 
 // toggleQueue adds/removes repository from queue
@@ -876,7 +894,7 @@ func (m *Model) addToQueue(r *git.Repository) error {
 		return nil
 	}
 
-	if err := m.queue.AddJob(j); err != nil {
+	if err := j.Start(); err != nil {
 		return err
 	}
 	r.SetWorkStatus(git.Queued)
@@ -884,11 +902,9 @@ func (m *Model) addToQueue(r *git.Repository) error {
 	return nil
 }
 
-// removeFromQueue removes a repository from the job queue
+// removeFromQueue is no longer needed since jobs start immediately
+// and are tracked by the git queue. Just update status.
 func (m *Model) removeFromQueue(r *git.Repository) error {
-	if err := m.queue.RemoveFromQueue(r); err != nil {
-		return err
-	}
 	r.SetWorkStatus(git.Available)
 	return nil
 }
@@ -934,19 +950,18 @@ func (m *Model) runPullForRepo(repo *git.Repository, suppressSuccess bool) tea.C
 		},
 		SuppressSuccess: suppressSuccess,
 	}
-	jobQueue := job.CreateJobQueue()
 	jobEntry := &job.Job{
 		Repository: repo,
 		JobType:    job.PullJob,
 		Options:    pullCfg,
 	}
-	if err := jobQueue.AddJob(jobEntry); err != nil {
+	if err := jobEntry.Start(); err != nil {
 		repo.SetWorkStatus(git.Available)
 		return func() tea.Msg { return errMsg{err: err} }
 	}
 	repo.SetWorkStatus(git.Queued)
 	m.jobsRunning = true
-	return tea.Batch(runJobQueueCmd(jobQueue, false), tickCmd())
+	return tickCmd()
 }
 
 func (m *Model) runPushForRepo(repo *git.Repository, force bool, suppressSuccess bool, message string) tea.Cmd {
@@ -985,19 +1000,18 @@ func (m *Model) runPushForRepo(repo *git.Repository, force bool, suppressSuccess
 		},
 		SuppressSuccess: suppressSuccess,
 	}
-	jobQueue := job.CreateJobQueue()
 	jobEntry := &job.Job{
 		Repository: repo,
 		JobType:    job.PushJob,
 		Options:    pushCfg,
 	}
-	if err := jobQueue.AddJob(jobEntry); err != nil {
+	if err := jobEntry.Start(); err != nil {
 		repo.SetWorkStatus(git.Available)
 		return func() tea.Msg { return errMsg{err: err} }
 	}
 	repo.SetWorkStatus(git.Queued)
 	m.jobsRunning = true
-	return tea.Batch(runJobQueueCmd(jobQueue, false), tickCmd())
+	return tickCmd()
 }
 
 func (m *Model) enqueueForcePrompt(repo *git.Repository) {
@@ -1072,11 +1086,11 @@ func (m *Model) unqueueAll() tea.Cmd {
 	}
 }
 
-// startQueue starts processing the job queue
+// startQueue starts jobs for all queued repositories
 func (m *Model) startQueue() tea.Cmd {
 	m.jobsRunning = true
-	currentQueue := m.queue
-	return tea.Batch(runJobQueueCmd(currentQueue, true), tickCmd())
+	// Jobs are now started immediately, just trigger a tick to update UI
+	return tickCmd()
 }
 
 func (m *Model) startFetchForRepos(repos []*git.Repository) tea.Cmd {
@@ -1120,8 +1134,8 @@ func (m *Model) startFetchForRepos(repos []*git.Repository) tea.Cmd {
 	return tea.Batch(fetchRepositoriesCmd(eligible), tickCmd())
 }
 
-func (m *Model) maybeStartInitialFetch(repos []*git.Repository) tea.Cmd {
-	if m.initialFetchStarted || m.loading || m.terminalTooSmall() {
+func (m *Model) maybeStartInitialStateEvaluation(repos []*git.Repository) tea.Cmd {
+	if m.initialStateProbeStarted || m.loading || m.terminalTooSmall() {
 		return nil
 	}
 
@@ -1133,29 +1147,46 @@ func (m *Model) maybeStartInitialFetch(repos []*git.Repository) tea.Cmd {
 		return nil
 	}
 
-	cmd := m.startFetchForRepos(reposToUse)
-	m.initialFetchStarted = true
-	return cmd
+	filtered := filterRepositories(reposToUse)
+
+	// Batch all initialization work in a single goroutine to avoid blocking TUI
+	return func() tea.Msg {
+		for _, repo := range filtered {
+			if repo == nil {
+				continue
+			}
+			if repo.State != nil {
+				repo.State.Message = "waiting"
+			}
+			repo.SetWorkStatus(git.Pending)
+			// Don't notify per-repository during batch init - causes TUI lag
+			command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
+		}
+
+		m.initialStateProbeStarted = true
+		m.jobsRunning = true
+
+		// Send a single repositoriesWaiting message after all repos are scheduled
+		return repositoriesWaitingMsg{}
+	}
 }
 
 func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 	return func() tea.Msg {
-		queue := job.CreateJobQueue()
-		failureSet := make(map[string]struct{})
-		failedRepoIDs := make(map[string]struct{})
+		// Start fetch jobs for all repositories
+		// Jobs are async and handled by the git queue
 		for _, repo := range repos {
 			opts := &command.FetchOptions{
 				RemoteName:  defaultRemoteName(repo),
 				CommandMode: command.ModeLegacy,
 				Timeout:     command.DefaultFetchTimeout,
 			}
-			if err := queue.AddJob(&job.Job{
+			jobEntry := &job.Job{
 				JobType:    job.FetchJob,
 				Repository: repo,
 				Options:    opts,
-			}); err != nil {
-				failureSet[repo.Name] = struct{}{}
-				failedRepoIDs[repo.RepoID] = struct{}{}
+			}
+			if err := jobEntry.Start(); err != nil {
 				recoverable := true
 				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
 					Operation:           command.OperationFetch,
@@ -1163,50 +1194,8 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 					Message:             err.Error(),
 					RecoverableOverride: &recoverable,
 				})
-				continue
 			}
 		}
-
-		fails := queue.StartJobsAsync()
-		for j := range fails {
-			if j == nil || j.Repository == nil {
-				continue
-			}
-			failureSet[j.Repository.Name] = struct{}{}
-			failedRepoIDs[j.Repository.RepoID] = struct{}{}
-		}
-
-		successRepos := make([]*git.Repository, 0, len(repos))
-		for _, repo := range repos {
-			if repo == nil {
-				continue
-			}
-			if _, failed := failedRepoIDs[repo.RepoID]; failed {
-				continue
-			}
-			successRepos = append(successRepos, repo)
-		}
-
-		for _, repo := range successRepos {
-			outcome := command.OperationOutcome{
-				Operation: command.OperationRefresh,
-				Message:   repo.State.Message,
-			}
-			if err := command.ScheduleRepositoryRefresh(repo, &outcome); err != nil {
-				failureSet[repo.Name] = struct{}{}
-				failedRepoIDs[repo.RepoID] = struct{}{}
-			}
-		}
-
-		if len(failureSet) > 0 {
-			failures := make([]string, 0, len(failureSet))
-			for name := range failureSet {
-				failures = append(failures, name)
-			}
-			sort.Strings(failures)
-			return autoFetchFailedMsg{names: failures}
-		}
-
 		return jobCompletedMsg{}
 	}
 }
@@ -1601,16 +1590,6 @@ func (m *Model) ensureRemoteCursorVisible(total, viewport int) {
 		m.remoteOffset = m.remoteBranchCursor
 	} else if m.remoteBranchCursor >= m.remoteOffset+viewport {
 		m.remoteOffset = m.remoteBranchCursor - viewport + 1
-	}
-}
-
-func runJobQueueCmd(queue *job.Queue, resetMainQueue bool) tea.Cmd {
-	return func() tea.Msg {
-		failures := queue.StartJobsAsync()
-		return jobQueueResultMsg{
-			resetMainQueue: resetMainQueue,
-			failures:       failures,
-		}
 	}
 }
 
@@ -2025,7 +2004,7 @@ func (m *Model) checkoutBranchCmd(repo *git.Repository, branch *git.Branch) tea.
 			return errMsg{err: fmt.Errorf("checkout branch %s: %w", branch.Name, err)}
 		}
 		repo.State.Message = fmt.Sprintf("switched to %s", branch.Name)
-		if err := refreshBranchState(repo); err != nil {
+		if err := scheduleRefresh(repo); err != nil {
 			return errMsg{err: err}
 		}
 		return repoActionResultMsg{panel: BranchPanel}
@@ -2044,7 +2023,7 @@ func (m *Model) deleteBranchCmd(repo *git.Repository, branch *git.Branch) tea.Cm
 			return errMsg{err: fmt.Errorf("delete branch %s: %w", branch.Name, err)}
 		}
 		repo.State.Message = fmt.Sprintf("deleted %s", branch.Name)
-		if err := refreshBranchState(repo); err != nil {
+		if err := scheduleRefresh(repo); err != nil {
 			return errMsg{err: err}
 		}
 		return repoActionResultMsg{panel: BranchPanel}
@@ -2074,7 +2053,7 @@ func (m *Model) checkoutBranchMultiCmd(repos []*git.Repository, branchName strin
 				return errMsg{err: fmt.Errorf("checkout branch %s in %s: %w", branchName, repo.Name, err)}
 			}
 			repo.State.Message = fmt.Sprintf("switched to %s", branchName)
-			if err := refreshBranchState(repo); err != nil {
+			if err := scheduleRefresh(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
 			}
 		}
@@ -2102,7 +2081,7 @@ func (m *Model) deleteBranchMultiCmd(repos []*git.Repository, branchName string)
 				return errMsg{err: fmt.Errorf("delete branch %s in %s: %w", branchName, repo.Name, err)}
 			}
 			repo.State.Message = fmt.Sprintf("deleted %s", branchName)
-			if err := refreshBranchState(repo); err != nil {
+			if err := scheduleRefresh(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
 			}
 		}
@@ -2130,7 +2109,7 @@ func (m *Model) checkoutRemoteBranchCmd(repo *git.Repository, entry remotePanelE
 			}
 		}
 		repo.State.Message = fmt.Sprintf("switched to %s", branchName)
-		if err := refreshBranchState(repo); err != nil {
+		if err := scheduleRefresh(repo); err != nil {
 			return errMsg{err: err}
 		}
 		return repoActionResultMsg{panel: RemotePanel}
@@ -2149,7 +2128,7 @@ func (m *Model) deleteRemoteBranchCmd(repo *git.Repository, entry remotePanelEnt
 			return errMsg{err: fmt.Errorf("delete remote branch %s/%s: %w", entry.RemoteName, entry.BranchName, err)}
 		}
 		repo.State.Message = fmt.Sprintf("deleted %s/%s", entry.RemoteName, entry.BranchName)
-		if err := refreshBranchState(repo); err != nil {
+		if err := scheduleRefresh(repo); err != nil {
 			return errMsg{err: err}
 		}
 		return repoActionResultMsg{panel: RemotePanel}
@@ -2177,7 +2156,7 @@ func (m *Model) checkoutRemoteBranchMultiCmd(repos []*git.Repository, entry remo
 				}
 			}
 			repo.State.Message = fmt.Sprintf("switched to %s", entry.BranchName)
-			if err := refreshBranchState(repo); err != nil {
+			if err := scheduleRefresh(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
 			}
 		}
@@ -2199,7 +2178,7 @@ func (m *Model) deleteRemoteBranchMultiCmd(repos []*git.Repository, entry remote
 				return errMsg{err: fmt.Errorf("delete remote branch %s/%s in %s: %w", entry.RemoteName, entry.BranchName, repo.Name, err)}
 			}
 			repo.State.Message = fmt.Sprintf("deleted %s/%s", entry.RemoteName, entry.BranchName)
-			if err := refreshBranchState(repo); err != nil {
+			if err := scheduleRefresh(repo); err != nil {
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
 			}
 		}
@@ -2219,7 +2198,7 @@ func (m *Model) checkoutCommitCmd(repo *git.Repository, commit *git.Commit) tea.
 			return errMsg{err: fmt.Errorf("checkout commit %s: %w", commit.Hash, err)}
 		}
 		repo.State.Message = fmt.Sprintf("checked out %s", shortHash(commit.Hash))
-		if err := refreshBranchState(repo); err != nil {
+		if err := scheduleRefresh(repo); err != nil {
 			return errMsg{err: err}
 		}
 		return repoActionResultMsg{panel: CommitPanel}
@@ -2238,7 +2217,7 @@ func (m *Model) resetToCommitCmd(repo *git.Repository, commit *git.Commit, reset
 			return errMsg{err: fmt.Errorf("reset --%s %s: %w", resetType, commit.Hash, err)}
 		}
 		repo.State.Message = fmt.Sprintf("reset --%s %s", resetType, shortHash(commit.Hash))
-		if err := refreshBranchState(repo); err != nil {
+		if err := scheduleRefresh(repo); err != nil {
 			return errMsg{err: err}
 		}
 		return repoActionResultMsg{panel: CommitPanel}

@@ -13,19 +13,18 @@ type Model struct {
 	repositories []*git.Repository
 	directories  []string
 	mode         Mode
-	queue        *job.Queue
 	spinnerIndex int
 	version      string
 
 	// UI state
-	cursor              int
-	width               int
-	height              int
-	ready               bool
-	initialFetchStarted bool
-	loading             bool
-	jobsRunning         bool
-	err                 error
+	cursor                   int
+	width                    int
+	height                   int
+	ready                    bool
+	initialStateProbeStarted bool
+	loading                  bool
+	jobsRunning              bool
+	err                      error
 
 	// View state
 	currentView            ViewType
@@ -46,6 +45,11 @@ type Model struct {
 	credentialInputField   credentialField
 	credentialInputBuffer  string
 
+	// Performance caching
+	cachedColWidths columnWidths
+	cachedWidth     int
+	cachedRepoCount int
+
 	// Styles
 	styles *Styles
 }
@@ -57,6 +61,13 @@ const (
 	OverviewView ViewType = iota
 	FocusView
 )
+
+// columnWidths holds the calculated widths for table columns
+type columnWidths struct {
+	repo      int
+	branch    int
+	commitMsg int
+}
 
 // SidePanelType represents which side panel is active
 type SidePanelType int
@@ -139,6 +150,7 @@ type Styles struct {
 	FailedSelectedItem            lipgloss.Style
 	RecoverableFailedItem         lipgloss.Style
 	QueuedItem                    lipgloss.Style
+	PendingItem                   lipgloss.Style
 	WorkingItem                   lipgloss.Style
 	SuccessItem                   lipgloss.Style
 	FailedItem                    lipgloss.Style
@@ -213,6 +225,8 @@ func DefaultStyles() *Styles {
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
 			Foreground(tagHighlightColor),
+		PendingItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#9E9E9E", Dark: "#757575"}),
 		WorkingItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#0097A7", Dark: "#4DD0E1"}),
 		SuccessItem: lipgloss.NewStyle().
@@ -256,7 +270,6 @@ func New(mode string, directories []string) *Model {
 	return &Model{
 		directories:         directories,
 		mode:                initialMode,
-		queue:               job.CreateJobQueue(),
 		repositories:        make([]*git.Repository, 0),
 		currentView:         OverviewView,
 		sidePanel:           NonePanel,
@@ -271,7 +284,7 @@ func New(mode string, directories []string) *Model {
 
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
-	return loadRepositoriesCmd(m.directories)
+	return tea.Batch(loadRepositoriesCmd(m.directories), listenRepositoryUpdatesCmd(), tickCmd())
 }
 
 func (m *Model) terminalTooSmall() bool {
@@ -282,6 +295,19 @@ func (m *Model) terminalTooSmall() bool {
 type repositoriesLoadedMsg struct {
 	repos []*git.Repository
 }
+
+// repositoryLoadedMsg streams repositories as they finish initializing.
+type repositoryLoadedMsg struct {
+	repo      *git.Repository
+	err       error
+	nextIndex int
+}
+
+// repositoryStateChangedMsg notifies the TUI that a repository triggered a RepositoryUpdated event.
+type repositoryStateChangedMsg struct{}
+
+// repositoriesWaitingMsg signals that repositories should render in waiting state immediately after scheduling state probes.
+type repositoriesWaitingMsg struct{}
 
 // errMsg is sent when an error occurs
 type errMsg struct {
@@ -297,18 +323,6 @@ type lazygitClosedMsg struct {
 
 // jobCompletedMsg is sent when a job completes (success or failure)
 type jobCompletedMsg struct{}
-
-// jobQueueResultMsg delivers the outcome of an async job queue execution
-type jobQueueResultMsg struct {
-	resetMainQueue bool
-	failures       map[*job.Job]error
-}
-
-// repoRefreshResultMsg is emitted after a repository refresh completes
-type repoRefreshResultMsg struct {
-	repo *git.Repository
-	err  error
-}
 
 // autoFetchFailedMsg signals non-fatal fetch failures during initial load
 type autoFetchFailedMsg struct {

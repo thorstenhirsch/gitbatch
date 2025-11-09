@@ -6,8 +6,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/thorstenhirsch/gitbatch/internal/command"
-	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/load"
 )
 
@@ -31,7 +29,7 @@ func loadRepositoriesCmd(directories []string) tea.Cmd {
 
 // tickCmd returns a command that sends a tick message after a delay
 func tickCmd() tea.Cmd {
-	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Millisecond*250, func(t time.Time) tea.Msg {
 		return jobCompletedMsg{}
 	})
 }
@@ -40,16 +38,4 @@ func tickCmd() tea.Cmd {
 func isLazygitAvailable() bool {
 	_, err := exec.LookPath("lazygit")
 	return err == nil
-}
-
-func refreshRepoStateCmd(repo *git.Repository) tea.Cmd {
-	return func() tea.Msg {
-		if repo == nil {
-			return repoRefreshResultMsg{}
-		}
-		if err := command.ScheduleRepositoryRefresh(repo, nil); err != nil {
-			return repoRefreshResultMsg{repo: repo, err: err}
-		}
-		return repoRefreshResultMsg{repo: repo}
-	}
 }

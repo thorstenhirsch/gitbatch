@@ -18,7 +18,7 @@ import (
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
-const DefaultFetchTimeout = 8 * time.Second
+const DefaultFetchTimeout = DefaultGitCommandTimeout
 
 var (
 	fetchTryCount int

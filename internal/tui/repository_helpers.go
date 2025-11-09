@@ -17,12 +17,19 @@ func filterRepositories(repos []*git.Repository) []*git.Repository {
 	})
 }
 
-// refreshBranchState reloads repository metadata and ensures branch commits are initialized.
-func refreshBranchState(repo *git.Repository) error {
+// scheduleRefresh enqueues a repository refresh and propagates any scheduling errors.
+func scheduleRefresh(repo *git.Repository) error {
 	if repo == nil {
 		return nil
 	}
-	if err := command.ScheduleRepositoryRefresh(repo, nil); err != nil {
+	message := ""
+	if repo.State != nil {
+		message = repo.State.Message
+	}
+	if err := command.ScheduleRepositoryRefresh(repo, &command.OperationOutcome{
+		Operation: command.OperationRefresh,
+		Message:   message,
+	}); err != nil {
 		command.ScheduleStateEvaluation(repo, command.OperationOutcome{
 			Operation: command.OperationRefresh,
 			Err:       err,
@@ -30,23 +37,5 @@ func refreshBranchState(repo *git.Repository) error {
 		})
 		return err
 	}
-	if state := repo.State; state != nil && state.Branch != nil {
-		if err := state.Branch.InitializeCommits(repo); err != nil {
-			command.ScheduleStateEvaluation(repo, command.OperationOutcome{
-				Operation: command.OperationRefresh,
-				Err:       err,
-				Message:   err.Error(),
-			})
-			return err
-		}
-	}
-	message := ""
-	if repo.State != nil {
-		message = repo.State.Message
-	}
-	command.ScheduleStateEvaluation(repo, command.OperationOutcome{
-		Operation: command.OperationRefresh,
-		Message:   message,
-	})
 	return nil
 }

@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/thorstenhirsch/gitbatch/internal/git"
@@ -12,23 +13,15 @@ import (
 // will be forwarded to the state queue regardless of success or failure.
 type GitCommandFunc func(ctx context.Context) OperationOutcome
 
+const DefaultGitCommandTimeout = 7 * time.Second
+
 // GitCommandRequest encapsulates metadata required by the git queue listener.
-// It provides deduplication keys for debounce handling and declares a timeout
-// enforced by the queue infrastructure.
+// It declares a timeout enforced by the queue infrastructure.
 type GitCommandRequest struct {
-	Key     string
-	Timeout time.Duration
-	Execute GitCommandFunc
-}
-
-// DebounceKey satisfies git.DebounceKeyProvider for queue deduplication.
-func (r GitCommandRequest) DebounceKey() string {
-	return r.Key
-}
-
-// TimeoutDuration satisfies git.TimeoutProvider so the queue can derive context deadlines.
-func (r GitCommandRequest) TimeoutDuration() time.Duration {
-	return r.Timeout
+	Key       string
+	Timeout   time.Duration
+	Operation OperationType
+	Execute   GitCommandFunc
 }
 
 // ScheduleGitCommand publishes a request to the repository git queue.
@@ -60,16 +53,78 @@ func AttachGitCommandWorker(r *git.Repository) {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		outcome := OperationOutcome{}
-		if req.Execute != nil {
-			outcome = req.Execute(ctx)
+		timeout := req.Timeout
+		if timeout <= 0 {
+			timeout = DefaultGitCommandTimeout
 		}
-		if ctx.Err() != nil && outcome.Err == nil {
-			outcome.Err = ctx.Err()
+		startGitOperation(r, req.Operation)
+		resultCh := make(chan OperationOutcome, 1)
+		done := make(chan struct{})
+		go func() {
+			outcome := OperationOutcome{}
+			if req.Execute != nil {
+				outcome = req.Execute(ctx)
+			}
+			if ctx.Err() != nil && outcome.Err == nil {
+				outcome.Err = ctx.Err()
+			}
+			select {
+			case resultCh <- outcome:
+			case <-done:
+			}
+		}()
+		select {
+		case outcome := <-resultCh:
+			close(done)
+			if outcome.Operation == "" {
+				outcome.Operation = req.Operation
+			}
+			ScheduleStateEvaluation(r, outcome)
+		case <-time.After(timeout):
+			close(done)
+			op := req.Operation
+			if op == "" {
+				op = OperationGit
+			}
+			recoverable := false
+			err := fmt.Errorf("%s command timed out after %s", op, timeout)
+			ScheduleStateEvaluation(r, OperationOutcome{
+				Operation:           op,
+				Err:                 err,
+				Message:             "git command timed out",
+				RecoverableOverride: &recoverable,
+			})
+			select {
+			case <-resultCh:
+			default:
+			}
 		}
-		ScheduleStateEvaluation(r, outcome)
 		return nil
 	})
+}
+
+func startGitOperation(r *git.Repository, operation OperationType) {
+	if r == nil {
+		return
+	}
+	message := "running git command..."
+	switch operation {
+	case OperationFetch:
+		message = "fetching..."
+	case OperationPull:
+		message = "pulling..."
+	case OperationMerge:
+		message = "merging..."
+	case OperationRebase:
+		message = "rebasing..."
+	case OperationPush:
+		message = "pushing..."
+	default:
+		if op := strings.TrimSpace(string(operation)); op != "" && operation != OperationGit {
+			message = fmt.Sprintf("%s...", strings.ToLower(op))
+		}
+	}
+	setRepositoryStatus(r, git.Working, message)
 }
 
 func init() {

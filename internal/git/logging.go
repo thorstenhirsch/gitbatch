@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -103,19 +104,35 @@ type tracedEventPayload struct {
 	Repository string
 	Event      string
 	Summary    string
+	Source     eventQueueType
 	Timestamp  time.Time
 }
 
 func (p tracedEventPayload) format() string {
 	timestamp := p.Timestamp.UTC().Format(traceTimeFormat)
+	indicator := queueIndicator(p.Source)
 	summary := p.Summary
 	if summary == "" {
 		summary = "-"
 	}
-	return fmt.Sprintf("%s repo=%s event=%s data=%s", timestamp, p.Repository, p.Event, summary)
+	if indicator != "" {
+		indicator += " "
+	}
+	return fmt.Sprintf("%s %srepo=%s event=%s data=%s", timestamp, indicator, p.Repository, p.Event, summary)
 }
 
-func (r *Repository) traceEvent(eventName string, data interface{}) {
+func queueIndicator(source eventQueueType) string {
+	switch source {
+	case queueGit:
+		return "[G]"
+	case queueState:
+		return "[S]"
+	default:
+		return ""
+	}
+}
+
+func (r *Repository) traceEvent(eventName string, source eventQueueType, data interface{}) {
 	if r == nil || !isTraceEnabled() || eventName == RepositoryEventTraced {
 		return
 	}
@@ -129,6 +146,7 @@ func (r *Repository) traceEvent(eventName string, data interface{}) {
 		Repository: r.Name,
 		Event:      eventName,
 		Summary:    summary,
+		Source:     source,
 		Timestamp:  time.Now().UTC(),
 	}
 
@@ -149,11 +167,46 @@ func renderTraceData(data interface{}) string {
 	case error:
 		return v.Error()
 	default:
+		if op := operationName(data); op != "" {
+			return fmt.Sprintf("%T,operation=%s", data, op)
+		}
 		if payload, err := json.Marshal(v); err == nil {
 			return string(payload)
 		}
 		return fmt.Sprintf("%T", data)
 	}
+}
+
+func operationName(data interface{}) string {
+	if data == nil {
+		return ""
+	}
+	val := reflect.ValueOf(data)
+	if !val.IsValid() {
+		return ""
+	}
+	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return ""
+		}
+		val = val.Elem()
+	}
+	if val.Kind() != reflect.Struct {
+		return ""
+	}
+	field := val.FieldByName("Operation")
+	if !field.IsValid() {
+		return ""
+	}
+	if !field.CanInterface() {
+		return ""
+	}
+	value := field.Interface()
+	if value == nil {
+		return ""
+	}
+	name := strings.TrimSpace(fmt.Sprintf("%v", value))
+	return name
 }
 
 func sanitizeTraceValue(value string) string {

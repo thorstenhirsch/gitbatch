@@ -2,7 +2,6 @@ package git
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -84,7 +83,6 @@ var (
 )
 
 const (
-	defaultEventDelay = 80 * time.Millisecond
 	// RepositoryUpdated defines the topic for an updated repository.
 	RepositoryUpdated = "repository.updated"
 	// BranchUpdated defines the topic for an updated branch.
@@ -104,29 +102,19 @@ type eventQueueType uint8
 const (
 	queueGit eventQueueType = iota
 	queueState
-	queueTUI
 	queueLog
 )
 
 type eventQueue struct {
-	repo     *Repository
-	kind     eventQueueType
-	debounce bool
-	delay    time.Duration
-	pending  map[string]*RepositoryEvent
-	mu       sync.Mutex
-	events   chan *RepositoryEvent
-	started  bool
-	handler  func(*RepositoryEvent)
+	repo    *Repository
+	kind    eventQueueType
+	mu      sync.Mutex
+	events  chan *RepositoryEvent
+	started bool
+	handler func(*RepositoryEvent)
 }
 
-type DebounceKeyProvider interface {
-	DebounceKey() string
-}
-
-type TimeoutProvider interface {
-	TimeoutDuration() time.Duration
-}
+const maxConcurrentGitWorkers = 10
 
 var (
 	gitQueueOnce      sync.Once
@@ -138,6 +126,9 @@ func gitSemaphore() *semaphore.Weighted {
 		workers := int64(runtime.GOMAXPROCS(0))
 		if workers < 1 {
 			workers = 1
+		}
+		if workers > maxConcurrentGitWorkers {
+			workers = maxConcurrentGitWorkers
 		}
 		gitQueueSemaphore = semaphore.NewWeighted(workers)
 	})
@@ -192,8 +183,8 @@ func FastInitializeRepo(dir string) (r *Repository, err error) {
 		ModTime: fstat.ModTime(),
 		Repo:    *rp,
 		State: &RepositoryState{
-			workStatus:       Available,
-			Message:          "",
+			workStatus:       Pending,
+			Message:          "waiting",
 			RecoverableError: false,
 		},
 		mutex:     &sync.RWMutex{},
@@ -255,8 +246,7 @@ func (r *Repository) Refresh() error {
 		return err
 	}
 
-	// we could send an event data but we don't need for this topic
-	return r.Publish(RepositoryUpdated, nil)
+	return nil
 }
 
 // RequestRefresh schedules a metadata refresh via the repository's event queue.
@@ -268,28 +258,26 @@ func (r *Repository) initEventQueues() {
 	if r.queues == nil {
 		r.queues = make(map[eventQueueType]*eventQueue)
 	}
-	r.queues[queueGit] = newEventQueue(r, queueGit, true, defaultEventDelay)
-	r.queues[queueState] = newEventQueue(r, queueState, false, 0)
-	r.queues[queueTUI] = newEventQueue(r, queueTUI, false, 0)
+	r.queues[queueGit] = newEventQueue(r, queueGit)
+	r.queues[queueState] = newEventQueue(r, queueState)
 	if isTraceEnabled() {
-		r.queues[queueLog] = newEventQueue(r, queueLog, false, 0)
+		r.queues[queueLog] = newEventQueue(r, queueLog)
 	}
 }
 
-func newEventQueue(repo *Repository, kind eventQueueType, debounce bool, delay time.Duration) *eventQueue {
+func newEventQueue(repo *Repository, kind eventQueueType) *eventQueue {
 	q := &eventQueue{
-		repo:     repo,
-		kind:     kind,
-		debounce: debounce,
-		delay:    delay,
+		repo: repo,
+		kind: kind,
 	}
 	switch kind {
 	case queueGit:
-		if q.delay <= 0 {
-			q.delay = defaultEventDelay
-		}
-		q.pending = make(map[string]*RepositoryEvent)
 		q.handler = q.handleGitEvent
+		q.events = make(chan *RepositoryEvent, 64)
+		go q.run()
+	case queueState:
+		// State queue needs async processing to avoid blocking during batch evaluation
+		q.handler = q.handleStateEvent
 		q.events = make(chan *RepositoryEvent, 64)
 		go q.run()
 	case queueLog:
@@ -297,9 +285,7 @@ func newEventQueue(repo *Repository, kind eventQueueType, debounce bool, delay t
 		q.events = make(chan *RepositoryEvent, 128)
 		go q.run()
 	default:
-		if debounce {
-			q.pending = make(map[string]*RepositoryEvent)
-		}
+		// Unknown queue types fall back to synchronous dispatch
 	}
 	return q
 }
@@ -313,8 +299,8 @@ func (r *Repository) On(event string, listener RepositoryListener) {
 	r.listeners[event] = append(r.listeners[event], listener)
 }
 
-// Publish publishes the data to a certain event by its name. Events are queued
-// and dispatched after a debounce interval to reduce duplicate work.
+// Publish publishes the data to a certain event by its name.
+// Events are either queued for async dispatch or handled synchronously.
 func (r *Repository) Publish(eventName string, data interface{}) error {
 	if r == nil {
 		return fmt.Errorf("repository not initialized")
@@ -322,15 +308,25 @@ func (r *Repository) Publish(eventName string, data interface{}) error {
 	if eventName == "" {
 		return fmt.Errorf("event name required")
 	}
+	event := &RepositoryEvent{Name: eventName, Data: data, Context: context.Background()}
+
 	queue := r.queueForEvent(eventName)
 	if queue == nil {
-		return fmt.Errorf("no queue configured for event %s", eventName)
+		// Handle synchronously for events with lightweight listeners
+		listeners := r.listenersFor(eventName)
+		for _, listener := range listeners {
+			if err := listener(event); err != nil {
+				return err
+			}
+		}
+		r.traceEvent(eventName, queueState, data)
+		return nil
 	}
-	event := &RepositoryEvent{Name: eventName, Data: data}
+
 	if err := queue.enqueue(event); err != nil {
 		return err
 	}
-	r.traceEvent(eventName, data)
+	r.traceEvent(eventName, queue.kind, data)
 	return nil
 }
 
@@ -358,21 +354,19 @@ func (r *Repository) queueForEvent(eventName string) *eventQueue {
 		return r.queues[queueGit]
 	case RepositoryEvaluationRequested:
 		return r.queues[queueState]
-	case RepositoryRefreshRequested, RepositoryUpdated, BranchUpdated:
-		return r.queues[queueTUI]
 	case RepositoryEventTraced:
 		return r.queues[queueLog]
 	default:
-		return r.queues[queueState]
+		// RepositoryRefreshRequested, RepositoryUpdated, BranchUpdated
+		// These events have lightweight listeners (non-blocking channel sends)
+		// so we handle them synchronously without a queue
+		return nil
 	}
 }
 
 func (q *eventQueue) enqueue(event *RepositoryEvent) error {
 	if q == nil {
 		return fmt.Errorf("event queue not initialized")
-	}
-	if q.kind == queueGit {
-		return q.enqueueGit(event)
 	}
 	if q.events != nil {
 		if event.Context == nil {
@@ -381,43 +375,11 @@ func (q *eventQueue) enqueue(event *RepositoryEvent) error {
 		q.events <- event
 		return nil
 	}
+	// For queues without channels, dispatch synchronously
 	if event.Context == nil {
 		event.Context = context.Background()
 	}
 	return q.dispatch(event)
-}
-
-func (q *eventQueue) enqueueGit(event *RepositoryEvent) error {
-	if q.events == nil {
-		return fmt.Errorf("git queue not initialized")
-	}
-	key, err := buildEventKey(event.Name, event.Data)
-	if err != nil {
-		return err
-	}
-
-	q.mu.Lock()
-	if q.pending == nil {
-		q.pending = make(map[string]*RepositoryEvent)
-	}
-	if _, exists := q.pending[key]; exists {
-		q.mu.Unlock()
-		return nil
-	}
-	q.pending[key] = event
-	q.mu.Unlock()
-
-	go func() {
-		if q.delay > 0 {
-			time.Sleep(q.delay)
-		}
-		q.mu.Lock()
-		delete(q.pending, key)
-		q.mu.Unlock()
-		q.events <- event
-	}()
-
-	return nil
 }
 
 func (q *eventQueue) run() {
@@ -436,15 +398,7 @@ func (q *eventQueue) handleGitEvent(event *RepositoryEvent) {
 	}
 	go func() {
 		defer sem.Release(1)
-		ctx := context.Background()
-		if provider, ok := event.Data.(TimeoutProvider); ok {
-			if timeout := provider.TimeoutDuration(); timeout > 0 {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(context.Background(), timeout)
-				defer cancel()
-			}
-		}
-		event.Context = ctx
+		event.Context = context.Background()
 		if err := q.dispatch(event); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
 			log.Printf("git queue event %s failed: %v", event.Name, err)
 		}
@@ -457,6 +411,15 @@ func (q *eventQueue) handleLogEvent(event *RepositoryEvent) {
 	}
 	if err := q.dispatch(event); err != nil && err != context.Canceled {
 		log.Printf("log queue event %s failed: %v", event.Name, err)
+	}
+}
+
+func (q *eventQueue) handleStateEvent(event *RepositoryEvent) {
+	if event.Context == nil {
+		event.Context = context.Background()
+	}
+	if err := q.dispatch(event); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+		log.Printf("state queue event %s failed: %v", event.Name, err)
 	}
 }
 
@@ -476,32 +439,6 @@ func (q *eventQueue) dispatch(event *RepositoryEvent) error {
 	return nil
 }
 
-func buildEventKey(eventName string, data interface{}) (string, error) {
-	if eventName == "" {
-		return "", fmt.Errorf("event name required")
-	}
-	keyPrefix := eventName + "|"
-	if provider, ok := data.(DebounceKeyProvider); ok {
-		return keyPrefix + "debounce|" + provider.DebounceKey(), nil
-	}
-	if data == nil {
-		return keyPrefix + "nil", nil
-	}
-	switch v := data.(type) {
-	case string:
-		return keyPrefix + "string|" + v, nil
-	case fmt.Stringer:
-		return keyPrefix + "stringer|" + v.String(), nil
-	case error:
-		return keyPrefix + "error|" + v.Error(), nil
-	default:
-		if payload, err := json.Marshal(v); err == nil {
-			return keyPrefix + "json|" + string(payload), nil
-		}
-		return fmt.Sprintf("%stype|%T|value|%v", keyPrefix, data, data), nil
-	}
-}
-
 // WorkStatus returns the state of the repository such as queued, failed etc.
 func (r *Repository) WorkStatus() WorkStatus {
 	return r.State.workStatus
@@ -512,11 +449,22 @@ func (r *Repository) SetWorkStatus(ws WorkStatus) {
 	if r.State == nil {
 		return
 	}
+	prev := r.State.workStatus
 	r.State.workStatus = ws
 	if ws != Fail {
 		r.State.RecoverableError = false
 	}
-	// we could send an event data but we don't need for this topic
+	if prev == ws {
+		return
+	}
+	r.NotifyRepositoryUpdated()
+}
+
+// NotifyRepositoryUpdated emits a repository.updated event without mutating state.
+func (r *Repository) NotifyRepositoryUpdated() {
+	if r == nil {
+		return
+	}
 	_ = r.Publish(RepositoryUpdated, nil)
 }
 

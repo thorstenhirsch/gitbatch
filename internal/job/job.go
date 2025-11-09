@@ -53,8 +53,9 @@ type PushJobConfig struct {
 	AllowForce      bool
 }
 
-// starts the job
-func (j *Job) start() error {
+// Start executes the job by scheduling the appropriate git command.
+// The job will be processed asynchronously by the git queue.
+func (j *Job) Start() error {
 	j.Repository.SetWorkStatus(git.Working)
 	// TODO: Better implementation required
 	switch mode := j.JobType; mode {
@@ -93,8 +94,9 @@ func (j *Job) start() error {
 		}
 		optsCopy := *opts
 		req := &command.GitCommandRequest{
-			Key:     fmt.Sprintf("fetch:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
-			Timeout: optsCopy.Timeout,
+			Key:       fmt.Sprintf("fetch:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   optsCopy.Timeout,
+			Operation: command.OperationFetch,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.FetchWithContext(ctx, j.Repository, &optsCopy)
 				return command.OperationOutcome{
@@ -155,7 +157,9 @@ func (j *Job) start() error {
 		opts = ensurePullOptions(opts, j.Repository, true, false)
 		optsCopy := *opts
 		req := &command.GitCommandRequest{
-			Key: fmt.Sprintf("pull:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Key:       fmt.Sprintf("pull:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationPull,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
 				return command.OperationOutcome{
@@ -184,7 +188,9 @@ func (j *Job) start() error {
 		}
 		optsCopy := command.MergeOptions{BranchName: j.Repository.State.Branch.Upstream.Name}
 		req := &command.GitCommandRequest{
-			Key: fmt.Sprintf("merge:%s:%s", j.Repository.RepoID, optsCopy.BranchName),
+			Key:       fmt.Sprintf("merge:%s:%s", j.Repository.RepoID, optsCopy.BranchName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationMerge,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.MergeWithContext(ctx, j.Repository, &optsCopy)
 				return command.OperationOutcome{
@@ -230,7 +236,9 @@ func (j *Job) start() error {
 		opts = ensurePullOptions(opts, j.Repository, false, true)
 		optsCopy := *opts
 		req := &command.GitCommandRequest{
-			Key: fmt.Sprintf("rebase:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Key:       fmt.Sprintf("rebase:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationRebase,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
 				return command.OperationOutcome{
@@ -291,7 +299,9 @@ func (j *Job) start() error {
 		opts = ensurePushOptions(opts, j.Repository)
 		optsCopy := *opts
 		req := &command.GitCommandRequest{
-			Key: fmt.Sprintf("push:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Key:       fmt.Sprintf("push:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationPush,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.PushWithContext(ctx, j.Repository, &optsCopy)
 				return command.OperationOutcome{

@@ -324,6 +324,31 @@ func (b *Branch) HasIncomingCommits() bool {
 	return count > 0
 }
 
+// IsClean checks if the working tree is clean according to git status.
+// Returns true if git reports "working tree clean" or "working directory clean".
+func (r *Repository) IsClean() bool {
+	args := []string{"status"}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.AbsPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	s := string(out)
+	s = strings.TrimSuffix(s, "\n")
+	if len(s) >= 0 {
+		vs := strings.Split(s, "\n")
+		line := vs[len(vs)-1]
+		// earlier versions of git returns "working directory clean" instead of
+		//"working tree clean" message
+		if strings.Contains(line, "working tree clean") ||
+			strings.Contains(line, "working directory clean") {
+			return true
+		}
+	}
+	return false
+}
+
 func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {
 	args := []string{"config", "--get", "branch." + branchName + ".remote"}
 	cmd := exec.Command("git", args...)
