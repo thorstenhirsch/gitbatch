@@ -1,17 +1,12 @@
 package load
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"sync"
 
 	"github.com/thorstenhirsch/gitbatch/internal/git"
-	"golang.org/x/sync/semaphore"
 )
-
-// AsyncAdd is interface to caller
-type AsyncAdd func(r *git.Repository)
 
 // SyncLoad initializes the go-git's repository objects with given
 // slice of paths. since this job is done parallel, the order of the directories
@@ -92,51 +87,4 @@ func SyncLoad(directories []string) (entities []*git.Repository, err error) {
 		return entities, fmt.Errorf("there are no git repositories at given path(s)")
 	}
 	return entities, nil
-}
-
-// AsyncLoad asynchronously adds to AsyncAdd function
-func AsyncLoad(directories []string, add AsyncAdd, d chan bool) error {
-	if len(directories) == 0 {
-		d <- true
-		return nil
-	}
-
-	// Use a context with timeout for better resource management
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var (
-		maxWorkers = runtime.GOMAXPROCS(0)
-		sem        = semaphore.NewWeighted(int64(maxWorkers))
-	)
-
-	var wg sync.WaitGroup
-
-	// Process directories with controlled concurrency
-	for _, dir := range directories {
-		if err := sem.Acquire(ctx, 1); err != nil {
-			break
-		}
-
-		wg.Add(1)
-		go func(directory string) {
-			defer func() {
-				sem.Release(1)
-				wg.Done()
-			}()
-
-			entity, err := git.InitializeRepo(directory)
-			if err != nil {
-				return
-			}
-
-			// Call the callback function (no mutex needed as it's the caller's responsibility)
-			add(entity)
-		}(dir)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-	d <- true
-	return nil
 }

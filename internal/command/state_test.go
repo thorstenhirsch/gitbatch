@@ -72,6 +72,10 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 	_, err = Run(tempClone, "git", []string{"clone", remoteDir, "."})
 	require.NoError(t, err)
 
+	// Check out the correct branch (clone might start in detached HEAD)
+	_, err = Run(tempClone, "git", []string{"checkout", branchName})
+	require.NoError(t, err)
+
 	// Configure git user for the clone
 	_, _ = Run(tempClone, "git", []string{"config", "user.email", "test@example.com"})
 	_, _ = Run(tempClone, "git", []string{"config", "user.name", "Test User"})
@@ -83,12 +87,14 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 	require.NoError(t, err)
 	_, err = Run(tempClone, "git", []string{"commit", "-m", "Add new file"})
 	require.NoError(t, err)
-	_, err = Run(tempClone, "git", []string{"push"})
+	pushOut, err := Run(tempClone, "git", []string{"push"})
 	require.NoError(t, err)
+	t.Logf("Push output: %s", pushOut)
 
 	// Fetch in the original repo to get incoming commits
-	_, err = Run(repo.AbsPath, "git", []string{"fetch"})
+	out, err := Run(repo.AbsPath, "git", []string{"fetch"})
 	require.NoError(t, err)
+	t.Logf("Fetch output: %s", out)
 
 	// Refresh repo state
 	require.NoError(t, repo.Refresh())
@@ -169,6 +175,10 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 	_, err = Run(tempClone, "git", []string{"clone", remoteDir, "."})
 	require.NoError(t, err)
 
+	// Check out the correct branch
+	_, err = Run(tempClone, "git", []string{"checkout", branchName})
+	require.NoError(t, err)
+
 	// Configure git user
 	_, _ = Run(tempClone, "git", []string{"config", "user.email", "test@example.com"})
 	_, _ = Run(tempClone, "git", []string{"config", "user.name", "Test User"})
@@ -194,14 +204,6 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 	// Refresh repo state
 	require.NoError(t, repo.Refresh())
 	require.NoError(t, ScheduleRepositoryRefresh(repo, nil))
-
-	// Debug: Check upstream state
-	t.Logf("Upstream: %+v", repo.State.Branch.Upstream)
-	if repo.State.Branch.Upstream != nil {
-		t.Logf("Upstream Reference: %+v", repo.State.Branch.Upstream.Reference)
-	}
-	t.Logf("Pullables: %s", repo.State.Branch.Pullables)
-	t.Logf("IsClean: %v", repo.IsClean())
 
 	// Verify setup: unclean working tree with incoming commits
 	require.False(t, repo.IsClean(), "working tree should not be clean")
@@ -255,6 +257,10 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *
 	defer os.RemoveAll(tempClone)
 
 	_, err = Run(tempClone, "git", []string{"clone", remoteDir, "."})
+	require.NoError(t, err)
+
+	// Check out the correct branch
+	_, err = Run(tempClone, "git", []string{"checkout", branchName})
 	require.NoError(t, err)
 
 	// Configure git user

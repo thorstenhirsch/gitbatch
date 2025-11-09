@@ -69,28 +69,3 @@ func configWithGoGit(r *git.Repository, options *ConfigOptions) (value string, e
 	}
 	return config.Raw.Section(options.Section).Option(options.Option), nil
 }
-
-// AddConfig adds an entry on the ConfigOptions field.
-func AddConfig(r *git.Repository, options *ConfigOptions, value string) (err error) {
-	return addConfigWithGit(r, options, value)
-
-}
-
-// addConfigWithGit is simply a bare git config --add <option> command which is flexible
-func addConfigWithGit(r *git.Repository, options *ConfigOptions, value string) (err error) {
-	args := make([]string, 0)
-	args = append(args, "config")
-	if len(string(options.Site)) > 0 {
-		args = append(args, "--"+string(options.Site))
-	}
-	args = append(args, "--add")
-	args = append(args, options.Section+"."+options.Option)
-	if len(value) > 0 {
-		args = append(args, value)
-	}
-	if _, err := Run(r.AbsPath, "git", args); err != nil {
-		return err
-	}
-	// till this step everything should be ok
-	return ScheduleRepositoryRefresh(r, nil)
-}
