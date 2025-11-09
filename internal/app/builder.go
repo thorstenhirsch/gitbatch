@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/tui"
 )
 
@@ -20,6 +21,7 @@ type Config struct {
 	Depth       int
 	QuickMode   bool
 	Mode        string
+	Trace       bool
 }
 
 // New will handle pre-required operations. It is designed to be a wrapper for
@@ -36,6 +38,10 @@ func New(argConfig *Config) (*App, error) {
 		return nil, err
 	}
 	app.Config = overrideConfig(presetConfig, argConfig)
+
+	if err := git.SetTraceLogging(app.Config.Trace); err != nil {
+		return nil, err
+	}
 
 	return app, nil
 }
@@ -69,6 +75,9 @@ func overrideConfig(appConfig, setupConfig *Config) *Config {
 
 	if setupConfig.QuickMode {
 		appConfig.QuickMode = setupConfig.QuickMode
+	}
+	if setupConfig.Trace {
+		appConfig.Trace = setupConfig.Trace
 	}
 	if len(setupConfig.Mode) > 0 {
 		appConfig.Mode = setupConfig.Mode

@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -41,7 +42,7 @@ func TestFetchWithGit(t *testing.T) {
 		{th.Repository, testFetchopts3},
 	}
 	for _, test := range tests {
-		_, err := fetchWithGit(test.inp1, test.inp2)
+		_, err := fetchWithGit(context.Background(), test.inp1, test.inp2)
 		require.NoError(t, err)
 	}
 }
@@ -60,7 +61,7 @@ func TestFetchWithGoGit(t *testing.T) {
 		{th.Repository, testFetchopts4, refspec},
 	}
 	for _, test := range tests {
-		_, err := fetchWithGoGit(test.inp1, test.inp2, test.inp3)
+		_, err := fetchWithGoGit(context.Background(), test.inp1, test.inp2, test.inp3)
 		require.NoError(t, err)
 	}
 }

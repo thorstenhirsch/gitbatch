@@ -121,6 +121,6 @@ func (r *Repository) Stash() (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.AbsPath
 	output, err := cmd.CombinedOutput()
-	_ = r.Refresh()
+	_ = r.RequestRefresh()
 	return string(output), err
 }

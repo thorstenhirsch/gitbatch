@@ -45,5 +45,5 @@ func Checkout(r *git.Repository, o *CheckoutOptions) error {
 		}
 	}
 	r.State.Message = msg
-	return r.Refresh()
+	return ScheduleRepositoryRefresh(r, nil)
 }

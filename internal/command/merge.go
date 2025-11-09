@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"regexp"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -23,6 +24,14 @@ type MergeOptions struct {
 // Merge incorporates changes from the named commits or branches into the
 // current branch
 func Merge(r *git.Repository, options *MergeOptions) (string, error) {
+	return MergeWithContext(context.Background(), r, options)
+}
+
+// MergeWithContext executes merge honouring the provided context for cancellation and deadlines.
+func MergeWithContext(ctx context.Context, r *git.Repository, options *MergeOptions) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	args := make([]string, 0)
 	args = append(args, "merge")
@@ -37,14 +46,11 @@ func Merge(r *git.Repository, options *MergeOptions) (string, error) {
 	}
 
 	ref, _ := r.Repo.Head()
-	if out, err := Run(r.AbsPath, "git", args); err != nil {
+	if out, err := RunWithContext(ctx, r.AbsPath, "git", args); err != nil {
 		return "", gerr.ParseGitError(out, err)
 	}
 
 	newref, _ := r.Repo.Head()
-	if err := r.ForceRefresh(); err != nil {
-		return "", err
-	}
 
 	msg, err := getMergeMessage(r, mergeReferenceHash(ref), mergeReferenceHash(newref))
 	if err != nil {

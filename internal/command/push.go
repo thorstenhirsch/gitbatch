@@ -1,6 +1,8 @@
 package command
 
 import (
+	"context"
+
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
@@ -18,8 +20,16 @@ type PushOptions struct {
 }
 
 func Push(r *git.Repository, options *PushOptions) (string, error) {
+	return PushWithContext(context.Background(), r, options)
+}
+
+// PushWithContext runs git push and respects context cancellation and deadlines.
+func PushWithContext(ctx context.Context, r *git.Repository, options *PushOptions) (string, error) {
 	if options == nil {
 		options = &PushOptions{}
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	remote := options.RemoteName
 	if remote == "" {
@@ -43,12 +53,9 @@ func Push(r *git.Repository, options *PushOptions) (string, error) {
 	if ref != "" {
 		args = append(args, ref)
 	}
-	out, err := Run(r.AbsPath, "git", args)
+	out, err := RunWithContext(ctx, r.AbsPath, "git", args)
 	if err != nil {
 		return "", gerr.ParseGitError(out, err)
-	}
-	if err := r.ForceRefresh(); err != nil {
-		return "", err
 	}
 	return "push completed", nil
 }

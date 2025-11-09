@@ -22,7 +22,7 @@ func refreshBranchState(repo *git.Repository) error {
 	if repo == nil {
 		return nil
 	}
-	if err := repo.ForceRefresh(); err != nil {
+	if err := command.ScheduleRepositoryRefresh(repo, nil); err != nil {
 		command.ScheduleStateEvaluation(repo, command.OperationOutcome{
 			Operation: command.OperationRefresh,
 			Err:       err,

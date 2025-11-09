@@ -1188,19 +1188,14 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 		}
 
 		for _, repo := range successRepos {
-			if err := repo.ForceRefresh(); err != nil {
-				failureSet[repo.Name] = struct{}{}
-				failedRepoIDs[repo.RepoID] = struct{}{}
-				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
-					Operation: command.OperationRefresh,
-					Err:       err,
-				})
-				continue
-			}
-			command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+			outcome := command.OperationOutcome{
 				Operation: command.OperationRefresh,
 				Message:   repo.State.Message,
-			})
+			}
+			if err := command.ScheduleRepositoryRefresh(repo, &outcome); err != nil {
+				failureSet[repo.Name] = struct{}{}
+				failedRepoIDs[repo.RepoID] = struct{}{}
+			}
 		}
 
 		if len(failureSet) > 0 {

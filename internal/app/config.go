@@ -29,6 +29,8 @@ var (
 	quickKeyDefault     = false
 	recursionKey        = "recursion"
 	recursionKeyDefault = 1
+	traceKey            = "trace"
+	traceKeyDefault     = false
 )
 
 // Configuration cache to avoid repeated loading
@@ -110,6 +112,7 @@ func buildConfig() (*Config, error) {
 		Depth:       viper.GetInt(recursionKey),
 		QuickMode:   viper.GetBool(quickKey),
 		Mode:        viper.GetString(modeKey),
+		Trace:       viper.GetBool(traceKey),
 	}
 
 	// Validate configuration
@@ -149,6 +152,7 @@ func setDefaults() error {
 	viper.SetDefault(quickKey, quickKeyDefault)
 	viper.SetDefault(recursionKey, recursionKeyDefault)
 	viper.SetDefault(modeKey, modeKeyDefault)
+	viper.SetDefault(traceKey, traceKeyDefault)
 	// viper.SetDefault(pathsKey, pathsKeyDefault)
 	return nil
 }

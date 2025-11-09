@@ -45,11 +45,11 @@ func commitWithGit(r *git.Repository, opt *CommitOptions) (err error) {
 		args = append(args, opt.CommitMsg)
 	}
 	if out, err := Run(r.AbsPath, "git", args); err != nil {
-		_ = r.Refresh()
+		_ = ScheduleRepositoryRefresh(r, nil)
 		return giterr.ParseGitError(out, err)
 	}
 	// till this step everything should be ok
-	return r.Refresh()
+	return ScheduleRepositoryRefresh(r, nil)
 }
 
 // commitWithGoGit is the primary commit method
@@ -74,9 +74,9 @@ func commitWithGoGit(r *git.Repository, options *CommitOptions) (err error) {
 
 	_, err = w.Commit(options.CommitMsg, opt)
 	if err != nil {
-		_ = r.Refresh()
+		_ = ScheduleRepositoryRefresh(r, nil)
 		return err
 	}
 	// till this step everything should be ok
-	return r.Refresh()
+	return ScheduleRepositoryRefresh(r, nil)
 }

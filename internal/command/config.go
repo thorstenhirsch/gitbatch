@@ -92,5 +92,5 @@ func addConfigWithGit(r *git.Repository, options *ConfigOptions, value string) (
 		return err
 	}
 	// till this step everything should be ok
-	return r.Refresh()
+	return ScheduleRepositoryRefresh(r, nil)
 }

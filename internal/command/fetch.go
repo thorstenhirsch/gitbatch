@@ -50,8 +50,16 @@ type FetchOptions struct {
 }
 
 // Fetch branches refs from one or more other repositories, along with the
-// objects necessary to complete their histories
+// objects necessary to complete their histories.
 func Fetch(r *git.Repository, o *FetchOptions) (message string, err error) {
+	return FetchWithContext(context.Background(), r, o)
+}
+
+// FetchWithContext performs fetch honouring the supplied context for cancellation and deadlines.
+func FetchWithContext(ctx context.Context, r *git.Repository, o *FetchOptions) (message string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	// here we configure fetch operation
 	// default mode is go-git (this may be configured)
 	mode := o.CommandMode
@@ -65,7 +73,7 @@ func Fetch(r *git.Repository, o *FetchOptions) (message string, err error) {
 	}
 	switch mode {
 	case ModeLegacy:
-		return fetchWithGit(r, o)
+		return fetchWithGit(ctx, r, o)
 	case ModeNative:
 		// this should be the refspec as default, let's give it a try
 		// TODO: Fix for quick mode, maybe better read config file
@@ -75,7 +83,7 @@ func Fetch(r *git.Repository, o *FetchOptions) (message string, err error) {
 		} else {
 			refspec = "+" + "refs/heads/" + r.State.Branch.Name + ":" + "/refs/remotes/" + r.State.Remote.Name + "/" + r.State.Branch.Name
 		}
-		return fetchWithGoGit(r, o, refspec)
+		return fetchWithGoGit(ctx, r, o, refspec)
 	}
 	return "", nil
 }
@@ -83,7 +91,7 @@ func Fetch(r *git.Repository, o *FetchOptions) (message string, err error) {
 // fetchWithGit is simply a bare git fetch <remote> command which is flexible
 // for complex operations, but on the other hand, it ties the app to another
 // tool. To avoid that, using native implementation is preferred.
-func fetchWithGit(r *git.Repository, options *FetchOptions) (string, error) {
+func fetchWithGit(ctx context.Context, r *git.Repository, options *FetchOptions) (string, error) {
 	args := make([]string, 0)
 	args = append(args, "fetch")
 	// parse options to command line arguments
@@ -107,9 +115,9 @@ func fetchWithGit(r *git.Repository, options *FetchOptions) (string, error) {
 		errRun error
 	)
 	if options.Timeout > 0 {
-		out, errRun = RunWithTimeout(r.AbsPath, "git", args, options.Timeout)
+		out, errRun = RunWithContextTimeout(ctx, r.AbsPath, "git", args, options.Timeout)
 	} else {
-		out, errRun = Run(r.AbsPath, "git", args)
+		out, errRun = RunWithContext(ctx, r.AbsPath, "git", args)
 	}
 	if errRun != nil {
 		if errors.Is(errRun, context.DeadlineExceeded) {
@@ -117,11 +125,6 @@ func fetchWithGit(r *git.Repository, options *FetchOptions) (string, error) {
 		}
 		return "", gerr.ParseGitError(out, errRun)
 	}
-
-	if err := r.ForceRefresh(); err != nil {
-		return "", err
-	}
-
 	uRef := "origin/HEAD"
 	if r.State.Branch != nil && r.State.Branch.Upstream != nil {
 		up := r.State.Branch.Upstream
@@ -146,7 +149,7 @@ func fetchWithGit(r *git.Repository, options *FetchOptions) (string, error) {
 // pattern for references on the remote side and <dst> is where those references
 // will be written locally. The + tells Git to update the reference even if it
 // isn't a fast-forward.
-func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (string, error) {
+func fetchWithGoGit(ctx context.Context, r *git.Repository, options *FetchOptions, refspec string) (string, error) {
 	opt := &gogit.FetchOptions{
 		RemoteName: options.RemoteName,
 		RefSpecs:   []config.RefSpec{config.RefSpec(refspec)},
@@ -177,9 +180,6 @@ func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (s
 
 	if err := r.Repo.Fetch(opt); err != nil {
 		if err == gogit.NoErrAlreadyUpToDate {
-			if errRefresh := r.ForceRefresh(); errRefresh != nil {
-				return "", errRefresh
-			}
 			uRef := initialRef
 			if r.State.Branch != nil && r.State.Branch.Upstream != nil {
 				up := r.State.Branch.Upstream
@@ -200,26 +200,21 @@ func fetchWithGoGit(r *git.Repository, options *FetchOptions, refspec string) (s
 			rp := r.State.Remote.RefSpecs[0]
 			if fetchTryCount < fetchMaxTry {
 				fetchTryCount++
-				return fetchWithGoGit(r, options, rp)
+				return fetchWithGoGit(ctx, r, options, rp)
 			} else {
 				return "", err
 			}
 		} else if strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
 			// The env variable SSH_AUTH_SOCK is not defined, maybe git can handle this
-			return fetchWithGit(r, options)
+			return fetchWithGit(ctx, r, options)
 		} else if err == transport.ErrAuthenticationRequired {
 			return "", gerr.ErrAuthenticationRequired
 		} else {
-			return fetchWithGit(r, options)
+			return fetchWithGit(ctx, r, options)
 		}
 	}
 
-	// Only refresh once at the end and get updated refs
-	if err := r.ForceRefresh(); err != nil {
-		return "", err
-	}
-
-	// Get updated refs after refresh
+	// Get updated refs after fetching
 	uRef := "origin/HEAD"
 	if r.State.Branch != nil && r.State.Branch.Upstream != nil {
 		up := r.State.Branch.Upstream

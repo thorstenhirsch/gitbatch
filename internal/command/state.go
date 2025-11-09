@@ -84,7 +84,11 @@ func AttachStateEvaluator(r *git.Repository) {
 		default:
 			return nil
 		}
+		prev := snapshotState(r)
 		EvaluateRepositoryState(r, outcome)
+		if outcome.Operation != OperationRefresh && stateChanged(prev, r) {
+			_ = ScheduleRepositoryRefresh(r, nil)
+		}
 		return nil
 	})
 }
@@ -95,6 +99,52 @@ func ScheduleStateEvaluation(r *git.Repository, outcome OperationOutcome) {
 		return
 	}
 	_ = r.Publish(git.RepositoryEvaluationRequested, outcome)
+}
+
+// ScheduleRepositoryRefresh emits an event-driven request to refresh repository metadata.
+// When outcome is non-nil, the refresh listener will schedule a subsequent state evaluation
+// using the provided outcome after the refresh completes (or propagates refresh errors).
+func ScheduleRepositoryRefresh(r *git.Repository, outcome *OperationOutcome) error {
+	if r == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+	if outcome != nil {
+		ScheduleStateEvaluation(r, *outcome)
+	}
+	return r.Publish(git.RepositoryRefreshRequested, nil)
+}
+
+type stateSnapshot struct {
+	status      git.WorkStatus
+	message     string
+	recoverable bool
+}
+
+func snapshotState(r *git.Repository) stateSnapshot {
+	if r == nil || r.State == nil {
+		return stateSnapshot{}
+	}
+	return stateSnapshot{
+		status:      r.WorkStatus(),
+		message:     r.State.Message,
+		recoverable: r.State.RecoverableError,
+	}
+}
+
+func stateChanged(prev stateSnapshot, r *git.Repository) bool {
+	if r == nil || r.State == nil {
+		return false
+	}
+	if prev.status != r.WorkStatus() {
+		return true
+	}
+	if prev.message != r.State.Message {
+		return true
+	}
+	if prev.recoverable != r.State.RecoverableError {
+		return true
+	}
+	return false
 }
 
 func applySuccessState(r *git.Repository, outcome OperationOutcome) {

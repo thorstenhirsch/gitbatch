@@ -26,19 +26,29 @@ const (
 // returns error it also encapsulates it as a golang.error which is a return code
 // of the command except zero
 func Run(d string, c string, args []string) (string, error) {
-	cmd := exec.Command(c, args...)
-	if d != "" {
-		cmd.Dir = d
-	}
-	output, err := cmd.CombinedOutput()
-	return trimTrailingNewline(string(output)), err
+	return RunWithContext(context.Background(), d, c, args)
 }
 
 // RunWithTimeout runs a command with a timeout context to prevent hanging
 func RunWithTimeout(d string, c string, args []string, timeout time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	return RunWithContextTimeout(context.Background(), d, c, args, timeout)
+}
 
+// RunWithContext executes a command honouring the provided context for cancellation.
+func RunWithContext(ctx context.Context, d string, c string, args []string) (string, error) {
+	return RunWithContextTimeout(ctx, d, c, args, 0)
+}
+
+// RunWithContextTimeout executes a command with the supplied context and optional timeout.
+func RunWithContextTimeout(ctx context.Context, d string, c string, args []string, timeout time.Duration) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, c, args...)
 	if d != "" {
 		cmd.Dir = d
@@ -80,23 +90,27 @@ func ensureEnv(env []string, key, value string) []string {
 // this method can be used. It is practical when you use a command and process a
 // failover according to a specific return code
 func Return(d string, c string, args []string) (int, error) {
-	cmd := exec.Command(c, args...)
+	return ReturnWithContext(context.Background(), d, c, args)
+}
+
+// ReturnWithContext executes a command returning its exit status while honouring context cancellation.
+func ReturnWithContext(ctx context.Context, d string, c string, args []string) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, c, args...)
 	if d != "" {
 		cmd.Dir = d
 	}
-	var err error
-	// this time the execution is a little different
+	cmd.Env = enrichGitEnv(os.Environ())
+	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if err := cmd.Start(); err != nil {
 		return -1, err
 	}
 	if err := cmd.Wait(); err != nil {
 		if exiterr, ok := err.(*exec.ExitError); ok {
-			// The program has exited with an exit code != 0
-
-			// This works on both Unix and Windows. Although package
-			// syscall is generally platform dependent, WaitStatus is
-			// defined for both Unix and Windows and in both cases has
-			// an ExitStatus() method with the same signature.
 			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
 				statusCode := status.ExitStatus()
 				return statusCode, err
@@ -105,7 +119,7 @@ func Return(d string, c string, args []string) (int, error) {
 			log.Fatalf("cmd.Wait: %v", err)
 		}
 	}
-	return -1, err
+	return 0, nil
 }
 
 // trimTrailingNewline removes the trailing new line form a string. this method

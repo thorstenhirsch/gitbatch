@@ -1,7 +1,9 @@
 package job
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/thorstenhirsch/gitbatch/internal/command"
@@ -72,18 +74,39 @@ func (j *Job) start() error {
 				Timeout:     command.DefaultFetchTimeout,
 			}
 		}
-		msg, err := command.Fetch(j.Repository, opts)
-		if err != nil {
-			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation: command.OperationFetch,
-				Err:       err,
-			})
+		if branch := j.Repository.State.Branch; branch != nil && branch.Upstream != nil {
+			if branch.Upstream.Reference == nil {
+				recoverable := true
+				upstreamName := strings.TrimSpace(branch.Upstream.Name)
+				msg := "upstream missing on remote"
+				if upstreamName != "" {
+					msg = fmt.Sprintf("upstream %s missing on remote", upstreamName)
+				}
+				command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+					Operation:           command.OperationFetch,
+					Err:                 errors.New(msg),
+					Message:             msg,
+					RecoverableOverride: &recoverable,
+				})
+				return nil
+			}
+		}
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:     fmt.Sprintf("fetch:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout: optsCopy.Timeout,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.FetchWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationFetch,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-			Operation: command.OperationFetch,
-			Message:   msg,
-		})
 	case PullJob:
 		j.Repository.State.Message = "pulling.."
 		var (
@@ -130,19 +153,22 @@ func (j *Job) start() error {
 			return nil
 		}
 		opts = ensurePullOptions(opts, j.Repository, true, false)
-		msg, err := command.Pull(j.Repository, opts)
-		if err != nil {
-			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation: command.OperationPull,
-				Err:       err,
-			})
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key: fmt.Sprintf("pull:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation:       command.OperationPull,
+					Message:         msg,
+					Err:             err,
+					SuppressSuccess: suppress,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-			Operation:       command.OperationPull,
-			Message:         msg,
-			SuppressSuccess: suppress,
-		})
 	case MergeJob:
 		j.Repository.State.Message = "merging.."
 		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
@@ -156,20 +182,21 @@ func (j *Job) start() error {
 			})
 			return nil
 		}
-		msg, err := command.Merge(j.Repository, &command.MergeOptions{
-			BranchName: j.Repository.State.Branch.Upstream.Name,
-		})
-		if err != nil {
-			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation: command.OperationMerge,
-				Err:       err,
-			})
+		optsCopy := command.MergeOptions{BranchName: j.Repository.State.Branch.Upstream.Name}
+		req := &command.GitCommandRequest{
+			Key: fmt.Sprintf("merge:%s:%s", j.Repository.RepoID, optsCopy.BranchName),
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.MergeWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationMerge,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-			Operation: command.OperationMerge,
-			Message:   msg,
-		})
 	case RebaseJob:
 		j.Repository.State.Message = "rebasing.."
 		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
@@ -201,18 +228,21 @@ func (j *Job) start() error {
 			opts = &command.PullOptions{}
 		}
 		opts = ensurePullOptions(opts, j.Repository, false, true)
-		msg, err := command.Pull(j.Repository, opts)
-		if err != nil {
-			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation: command.OperationRebase,
-				Err:       err,
-			})
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key: fmt.Sprintf("rebase:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationRebase,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-			Operation: command.OperationRebase,
-			Message:   msg,
-		})
 	case PushJob:
 		j.Repository.State.Message = "pushing.."
 		if j.Repository.State == nil || j.Repository.State.Remote == nil {
@@ -259,19 +289,22 @@ func (j *Job) start() error {
 			opts = &command.PushOptions{}
 		}
 		opts = ensurePushOptions(opts, j.Repository)
-		msg, err := command.Push(j.Repository, opts)
-		if err != nil {
-			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation: command.OperationPush,
-				Err:       err,
-			})
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key: fmt.Sprintf("push:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.PushWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation:       command.OperationPush,
+					Message:         msg,
+					Err:             err,
+					SuppressSuccess: suppress,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-			Operation:       command.OperationPush,
-			Message:         msg,
-			SuppressSuccess: suppress,
-		})
 	default:
 		j.Repository.SetWorkStatus(git.Available)
 		return nil
