@@ -550,6 +550,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	dirty := repoIsDirty(r)
 	failed := status == git.Fail
 	recoverable := failed && r.State != nil && r.State.RecoverableError
+	requiresCredentials := failed && r.State != nil && r.State.RequiresCredentials
 
 	switch status {
 	case git.Pending:
@@ -570,7 +571,10 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		style = m.styles.SuccessItem
 	case git.Fail:
 		statusIcon = failSymbol
-		if recoverable {
+		if requiresCredentials {
+			// Requires credentials gets the same visual treatment as recoverable
+			style = m.styles.RecoverableFailedItem
+		} else if recoverable {
 			style = m.styles.RecoverableFailedItem
 		} else {
 			style = m.styles.FailedItem

@@ -354,6 +354,52 @@ func (m *Model) dismissCredentialPrompt() {
 	m.advanceCredentialPrompt()
 }
 
+func (m *Model) openCredentialDialog(repo *git.Repository) {
+	if repo == nil {
+		return
+	}
+	
+	// Create a job for this repository based on its remote operation
+	// Try to infer the operation type from the state
+	jobType := job.FetchJob // Default to fetch
+	
+	// Check if there's already a job in the queue for this repo
+	var existingJob *job.Job
+	for _, prompt := range m.credentialPromptQueue {
+		if prompt != nil && prompt.repo != nil && prompt.repo.RepoID == repo.RepoID {
+			existingJob = prompt.job
+			break
+		}
+	}
+	
+	if existingJob == nil {
+		existingJob = &job.Job{
+			JobType:    jobType,
+			Repository: repo,
+			Options: &command.FetchOptions{
+				RemoteName: defaultRemoteName(repo),
+				Timeout:    command.DefaultFetchTimeout,
+			},
+		}
+	}
+	
+	prompt := &credentialPrompt{
+		repo:     repo,
+		job:      existingJob,
+		username: "",
+		password: "",
+	}
+	
+	// Add to queue and activate immediately if no active prompt
+	if m.activeCredentialPrompt == nil {
+		m.activeCredentialPrompt = prompt
+		m.credentialInputField = credentialFieldUsername
+		m.credentialInputBuffer = ""
+	} else {
+		m.credentialPromptQueue = append(m.credentialPromptQueue, prompt)
+	}
+}
+
 func (m *Model) advanceCredentialPrompt() {
 	if len(m.credentialPromptQueue) == 0 {
 		m.activeCredentialPrompt = nil
@@ -600,6 +646,13 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.unqueueAll()
 
 	case "enter":
+		// Check if current repository requires credentials
+		repo := m.currentRepository()
+		if repo != nil && repo.State != nil && repo.State.RequiresCredentials && repo.WorkStatus() == git.Fail {
+			// Open credential dialog for this repository
+			m.openCredentialDialog(repo)
+			return m, nil
+		}
 		return m, m.startQueue()
 
 	case "f":
