@@ -1,7 +1,6 @@
 package command
 
 import (
-	"fmt"
 	"os"
 	"regexp"
 	"sort"
@@ -24,16 +23,7 @@ func shortStatus(r *git.Repository, option string) string {
 
 // Status returns the dirty files
 func Status(r *git.Repository) ([]*git.File, error) {
-	// in case we want configure Status command externally
-	mode := ModeLegacy
-
-	switch mode {
-	case ModeLegacy:
-		return statusWithGit(r)
-	case ModeNative:
-		return statusWithGoGit(r)
-	}
-	return nil, fmt.Errorf("unhandled status operation")
+	return statusWithGit(r)
 }
 
 // PlainStatus returns the plain status
@@ -70,28 +60,6 @@ func statusWithGit(r *git.Repository) ([]*git.File, error) {
 			AbsPath: r.AbsPath + string(os.PathSeparator) + path,
 			X:       git.FileStatus(x),
 			Y:       git.FileStatus(y),
-		})
-	}
-	sort.Sort(git.FilesAlphabetical(files))
-	return files, nil
-}
-
-func statusWithGoGit(r *git.Repository) ([]*git.File, error) {
-	files := make([]*git.File, 0)
-	w, err := r.Repo.Worktree()
-	if err != nil {
-		return files, err
-	}
-	s, err := w.Status()
-	if err != nil {
-		return files, err
-	}
-	for k, v := range s {
-		files = append(files, &git.File{
-			Name:    k,
-			AbsPath: r.AbsPath + string(os.PathSeparator) + k,
-			X:       git.FileStatus(v.Staging),
-			Y:       git.FileStatus(v.Worktree),
 		})
 	}
 	sort.Sort(git.FilesAlphabetical(files))

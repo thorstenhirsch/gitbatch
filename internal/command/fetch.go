@@ -4,16 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
@@ -22,7 +17,6 @@ const DefaultFetchTimeout = DefaultGitCommandTimeout
 
 var (
 	fetchTryCount int
-	fetchMaxTry   = 1
 )
 
 // FetchOptions defines the rules for fetch operation
@@ -41,8 +35,6 @@ type FetchOptions struct {
 	// Force allows the fetch to update a local branch even when the remote
 	// branch does not descend from it.
 	Force bool
-	// Mode is the command mode
-	CommandMode Mode
 	// Timeout is the maximum duration allowed for the fetch command when
 	// executed via the legacy git CLI. If zero, a sensible default is used.
 	Timeout time.Duration
@@ -60,32 +52,11 @@ func FetchWithContext(ctx context.Context, r *git.Repository, o *FetchOptions) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// here we configure fetch operation
-	// default mode is go-git (this may be configured)
-	mode := o.CommandMode
 	fetchTryCount = 0
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultFetchTimeout
 	}
-	// prune and dry run is not supported from go-git yet, rely on old friend
-	if o.Prune || o.DryRun {
-		mode = ModeLegacy
-	}
-	switch mode {
-	case ModeLegacy:
-		return fetchWithGit(ctx, r, o)
-	case ModeNative:
-		// this should be the refspec as default, let's give it a try
-		// TODO: Fix for quick mode, maybe better read config file
-		var refspec string
-		if r.State.Branch == nil {
-			refspec = "+refs/heads/*:refs/remotes/origin/*"
-		} else {
-			refspec = "+" + "refs/heads/" + r.State.Branch.Name + ":" + "/refs/remotes/" + r.State.Remote.Name + "/" + r.State.Branch.Name
-		}
-		return fetchWithGoGit(ctx, r, o, refspec)
-	}
-	return "", nil
+	return fetchWithGit(ctx, r, o)
 }
 
 // fetchWithGit is simply a bare git fetch <remote> command which is flexible
@@ -138,96 +109,6 @@ func fetchWithGit(ctx context.Context, r *git.Repository, options *FetchOptions)
 
 	msg, err := getFetchMessage(r, initialRef, uRef)
 	if err != nil {
-		msg = "couldn't get stat"
-	}
-	return msg, nil
-}
-
-// fetchWithGoGit is the primary fetch method and refspec is the main feature.
-// RefSpec is a mapping from local branches to remote references The format of
-// the refspec is an optional +, followed by <src>:<dst>, where <src> is the
-// pattern for references on the remote side and <dst> is where those references
-// will be written locally. The + tells Git to update the reference even if it
-// isn't a fast-forward.
-func fetchWithGoGit(ctx context.Context, r *git.Repository, options *FetchOptions, refspec string) (string, error) {
-	opt := &gogit.FetchOptions{
-		RemoteName: options.RemoteName,
-		RefSpecs:   []config.RefSpec{config.RefSpec(refspec)},
-		Force:      options.Force,
-	}
-	// if any credential is given, let's add it to the git.FetchOptions
-	if options.Credentials != nil {
-		protocol, err := git.AuthProtocol(r.State.Remote)
-		if err != nil {
-			return "", err
-		}
-		if protocol == git.AuthProtocolHTTP || protocol == git.AuthProtocolHTTPS {
-			opt.Auth = &http.BasicAuth{
-				Username: options.Credentials.User,
-				Password: options.Credentials.Password,
-			}
-		} else {
-			return "", gerr.ErrInvalidAuthMethod
-		}
-	}
-	if options.Progress {
-		opt.Progress = os.Stdout
-	}
-
-	// Store initial ref before fetch
-	ref, _ := r.Repo.Head()
-	initialRef := shortHash(ref)
-
-	if err := r.Repo.Fetch(opt); err != nil {
-		if err == gogit.NoErrAlreadyUpToDate {
-			uRef := initialRef
-			if r.State.Branch != nil && r.State.Branch.Upstream != nil {
-				up := r.State.Branch.Upstream
-				switch {
-				case up.Reference != nil:
-					uRef = shortHash(up.Reference)
-				case up.Name != "":
-					uRef = up.Name
-				}
-			}
-			msg, msgErr := getFetchMessage(r, initialRef, uRef)
-			if msgErr != nil {
-				msg = "couldn't get stat"
-			}
-			return msg, nil
-		} else if strings.Contains(err.Error(), "couldn't find remote ref") {
-			// we don't have remote ref, so lets pull other things.. maybe it'd be useful
-			rp := r.State.Remote.RefSpecs[0]
-			if fetchTryCount < fetchMaxTry {
-				fetchTryCount++
-				return fetchWithGoGit(ctx, r, options, rp)
-			} else {
-				return "", err
-			}
-		} else if strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
-			// The env variable SSH_AUTH_SOCK is not defined, maybe git can handle this
-			return fetchWithGit(ctx, r, options)
-		} else if err == transport.ErrAuthenticationRequired {
-			return "", gerr.ErrAuthenticationRequired
-		} else {
-			return fetchWithGit(ctx, r, options)
-		}
-	}
-
-	// Get updated refs after fetching
-	uRef := "origin/HEAD"
-	if r.State.Branch != nil && r.State.Branch.Upstream != nil {
-		up := r.State.Branch.Upstream
-		switch {
-		case up.Reference != nil:
-			uRef = shortHash(up.Reference)
-		case up.Name != "":
-			uRef = up.Name
-		}
-	}
-
-	msg, errMsg := getFetchMessage(r, initialRef, uRef)
-	if errMsg != nil {
 		msg = "couldn't get stat"
 	}
 	return msg, nil

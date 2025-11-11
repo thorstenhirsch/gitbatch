@@ -70,9 +70,8 @@ func (j *Job) Start() error {
 				remoteName = j.Repository.State.Remote.Name
 			}
 			opts = &command.FetchOptions{
-				RemoteName:  remoteName,
-				CommandMode: command.ModeLegacy,
-				Timeout:     command.DefaultFetchTimeout,
+				RemoteName: remoteName,
+				Timeout:    command.DefaultFetchTimeout,
 			}
 		}
 		if branch := j.Repository.State.Branch; branch != nil && branch.Upstream != nil {
@@ -335,13 +334,6 @@ func ensurePullOptions(opts *command.PullOptions, repo *git.Repository, ffOnly, 
 	if opts.RemoteName == "" {
 		opts.RemoteName = remoteName
 	}
-	// Force CLI execution to respect ff-only/rebase options
-	if opts.CommandMode == command.ModeNative {
-		opts.CommandMode = command.ModeLegacy
-	}
-	if opts.CommandMode != command.ModeLegacy && opts.CommandMode != command.ModeNative {
-		opts.CommandMode = command.ModeLegacy
-	}
 	if opts.ReferenceName == "" {
 		if branch := branchNameForPull(repo); branch != "" {
 			opts.ReferenceName = branch
@@ -369,9 +361,6 @@ func ensurePushOptions(opts *command.PushOptions, repo *git.Repository) *command
 	}
 	if opts.ReferenceName == "" && repo.State.Branch != nil && repo.State.Branch.Name != "" {
 		opts.ReferenceName = repo.State.Branch.Name
-	}
-	if opts.CommandMode != command.ModeLegacy && opts.CommandMode != command.ModeNative {
-		opts.CommandMode = command.ModeLegacy
 	}
 	return opts
 }

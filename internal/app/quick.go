@@ -41,10 +41,9 @@ func operate(directory, mode string) error {
 	switch mode {
 	case "fetch":
 		msg, err := command.Fetch(r, &command.FetchOptions{
-			RemoteName:  remoteName,
-			Progress:    true,
-			CommandMode: command.ModeLegacy,
-			Timeout:     command.DefaultFetchTimeout,
+			RemoteName: remoteName,
+			Progress:   true,
+			Timeout:    command.DefaultFetchTimeout,
 		})
 		if err != nil {
 			command.ScheduleStateEvaluation(r, command.OperationOutcome{
@@ -62,7 +61,6 @@ func operate(directory, mode string) error {
 		msg, err := command.Pull(r, &command.PullOptions{
 			RemoteName:    remoteName,
 			Progress:      true,
-			CommandMode:   command.ModeLegacy,
 			ReferenceName: branchNameForQuick(r),
 			FFOnly:        true,
 		})
@@ -101,7 +99,6 @@ func operate(directory, mode string) error {
 		msg, err := command.Pull(r, &command.PullOptions{
 			RemoteName:    remoteName,
 			Progress:      true,
-			CommandMode:   command.ModeLegacy,
 			ReferenceName: branchNameForQuick(r),
 			Rebase:        true,
 		})
@@ -121,7 +118,6 @@ func operate(directory, mode string) error {
 		msg, err := command.Push(r, &command.PushOptions{
 			RemoteName:    remoteName,
 			ReferenceName: branchNameForQuick(r),
-			CommandMode:   command.ModeLegacy,
 		})
 		if err != nil {
 			command.ScheduleStateEvaluation(r, command.OperationOutcome{

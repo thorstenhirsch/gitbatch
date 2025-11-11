@@ -38,7 +38,6 @@ func TestPush(t *testing.T) {
 	opts := &PushOptions{
 		RemoteName:    "origin",
 		ReferenceName: branchName,
-		CommandMode:   ModeLegacy,
 	}
 
 	_, err = Push(th.Repository, opts)

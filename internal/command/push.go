@@ -15,8 +15,6 @@ type PushOptions struct {
 	ReferenceName string
 	// Force toggles --force pushes when required.
 	Force bool
-	// Mode is the command mode
-	CommandMode Mode
 }
 
 func Push(r *git.Repository, options *PushOptions) (string, error) {

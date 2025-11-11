@@ -2,21 +2,14 @@ package command
 
 import (
 	"context"
-	"os"
-	"strings"
 
-	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/storage"
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
 var (
 	pullTryCount int
-	pullMaxTry   = 1
 )
 
 // PullOptions defines the rules for pull operation
@@ -38,8 +31,6 @@ type PullOptions struct {
 	FFOnly bool
 	// Rebase performs the pull using rebase instead of merge.
 	Rebase bool
-	// Mode is the command mode
-	CommandMode Mode
 }
 
 // Pull incorporates changes from a remote repository into the current branch.
@@ -57,19 +48,7 @@ func PullWithContext(ctx context.Context, r *git.Repository, o *PullOptions) (st
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
-	// here we configure pull operation
-	if o.CommandMode == ModeNative && (o.FFOnly || o.Rebase) {
-		return pullWithGit(ctx, r, o)
-	}
-
-	switch o.CommandMode {
-	case ModeLegacy:
-		return pullWithGit(ctx, r, o)
-	case ModeNative:
-		return pullWithGoGit(ctx, r, o)
-	}
-	return "", nil
+	return pullWithGit(ctx, r, o)
 }
 
 func pullWithGit(ctx context.Context, r *git.Repository, options *PullOptions) (string, error) {
@@ -99,76 +78,6 @@ func pullWithGit(ctx context.Context, r *git.Repository, options *PullOptions) (
 
 	msg, err := getMergeMessage(r, referenceHash(ref), referenceHash(newref))
 	if err != nil {
-		msg = "couldn't get stat"
-	}
-	return msg, nil
-}
-
-func pullWithGoGit(ctx context.Context, r *git.Repository, options *PullOptions) (string, error) {
-	if options.FFOnly || options.Rebase {
-		return pullWithGit(ctx, r, options)
-	}
-
-	opt := &gogit.PullOptions{
-		RemoteName:   options.RemoteName,
-		SingleBranch: options.SingleBranch,
-		Force:        options.Force,
-	}
-	if len(options.ReferenceName) > 0 {
-		ref := plumbing.NewRemoteReferenceName(options.RemoteName, options.ReferenceName)
-		opt.ReferenceName = ref
-	}
-	// if any credential is given, let's add it to the git.PullOptions
-	if options.Credentials != nil {
-		protocol, err := git.AuthProtocol(r.State.Remote)
-		if err != nil {
-			return "", err
-		}
-		if protocol == git.AuthProtocolHTTP || protocol == git.AuthProtocolHTTPS {
-			opt.Auth = &http.BasicAuth{
-				Username: options.Credentials.User,
-				Password: options.Credentials.Password,
-			}
-		} else {
-			return "", gerr.ErrInvalidAuthMethod
-		}
-	}
-	if options.Progress {
-		opt.Progress = os.Stdout
-	}
-	w, err := r.Repo.Worktree()
-	if err != nil {
-		return "", err
-	}
-	ref, _ := r.Repo.Head()
-	if err = w.Pull(opt); err != nil {
-		if err == gogit.NoErrAlreadyUpToDate {
-			msg, msgErr := getMergeMessage(r, referenceHash(ref), referenceHash(ref))
-			if msgErr != nil {
-				msg = "couldn't get stat"
-			}
-			return msg, nil
-		} else if err == storage.ErrReferenceHasChanged && pullTryCount < pullMaxTry {
-			pullTryCount++
-			if _, err := FetchWithContext(ctx, r, &FetchOptions{
-				RemoteName: options.RemoteName,
-			}); err != nil {
-				return "", err
-			}
-			return PullWithContext(ctx, r, options)
-		} else if strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
-			// The env variable SSH_AUTH_SOCK is not defined, maybe git can handle this
-			return pullWithGit(ctx, r, options)
-		} else if err == transport.ErrAuthenticationRequired {
-			return "", gerr.ErrAuthenticationRequired
-		} else {
-			return pullWithGit(ctx, r, options)
-		}
-	}
-	newref, _ := r.Repo.Head()
-
-	msg, errMsg := getMergeMessage(r, referenceHash(ref), referenceHash(newref))
-	if errMsg != nil {
 		msg = "couldn't get stat"
 	}
 	return msg, nil

@@ -17,8 +17,6 @@ type MergeOptions struct {
 	Verbose bool
 	// With true do not show a diffstat at the end of the merge.
 	NoStat bool
-	// Mode is the command mode
-	CommandMode Mode
 }
 
 // Merge incorporates changes from the named commits or branches into the

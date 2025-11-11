@@ -316,21 +316,6 @@ func (m *Model) backspaceCredentialInput() {
 	m.credentialInputBuffer = string(runes[:len(runes)-1])
 }
 
-func (m *Model) toggleCredentialField() {
-	if m.activeCredentialPrompt == nil {
-		return
-	}
-	if m.credentialInputField == credentialFieldUsername {
-		m.activeCredentialPrompt.username = strings.TrimSpace(m.credentialInputBuffer)
-		m.credentialInputField = credentialFieldPassword
-		m.credentialInputBuffer = m.activeCredentialPrompt.password
-		return
-	}
-	m.activeCredentialPrompt.password = m.credentialInputBuffer
-	m.credentialInputField = credentialFieldUsername
-	m.credentialInputBuffer = m.activeCredentialPrompt.username
-}
-
 func (m *Model) submitCredentialInput() tea.Cmd {
 	prompt := m.activeCredentialPrompt
 	if prompt == nil {
@@ -387,48 +372,6 @@ func (m *Model) advanceCredentialPrompt() {
 	}
 }
 
-func (m *Model) enqueueCredentialPrompt(j *job.Job) {
-	if j == nil || j.Repository == nil {
-		return
-	}
-
-	if m.activeCredentialPrompt != nil && m.activeCredentialPrompt.repo != nil && m.activeCredentialPrompt.repo.RepoID == j.Repository.RepoID {
-		m.activeCredentialPrompt.job = j
-		if creds := credentialsFromJob(j); creds != nil {
-			m.activeCredentialPrompt.username = creds.User
-			if m.credentialInputField == credentialFieldUsername {
-				m.credentialInputBuffer = creds.User
-			}
-		}
-		return
-	}
-
-	for _, pending := range m.credentialPromptQueue {
-		if pending == nil || pending.repo == nil {
-			continue
-		}
-		if pending.repo.RepoID == j.Repository.RepoID {
-			pending.job = j
-			if creds := credentialsFromJob(j); creds != nil {
-				pending.username = creds.User
-			}
-			return
-		}
-	}
-
-	prompt := &credentialPrompt{
-		repo: j.Repository,
-		job:  j,
-	}
-	if creds := credentialsFromJob(j); creds != nil {
-		prompt.username = creds.User
-	}
-	m.credentialPromptQueue = append(m.credentialPromptQueue, prompt)
-	if m.activeCredentialPrompt == nil {
-		m.advanceCredentialPrompt()
-	}
-}
-
 func (m *Model) retryCredentialPrompt(prompt *credentialPrompt) tea.Cmd {
 	if prompt == nil || prompt.repo == nil || prompt.job == nil {
 		return nil
@@ -479,9 +422,6 @@ func cloneJobWithCredentials(original *job.Job, creds *git.Credentials) *job.Job
 		case *command.FetchOptions:
 			copyCfg := *cfg
 			copyCfg.Credentials = creds
-			if copyCfg.CommandMode == 0 {
-				copyCfg.CommandMode = command.ModeLegacy
-			}
 			if copyCfg.Timeout <= 0 {
 				copyCfg.Timeout = command.DefaultFetchTimeout
 			}
@@ -489,9 +429,6 @@ func cloneJobWithCredentials(original *job.Job, creds *git.Credentials) *job.Job
 		case command.FetchOptions:
 			copyCfg := cfg
 			copyCfg.Credentials = creds
-			if copyCfg.CommandMode == 0 {
-				copyCfg.CommandMode = command.ModeLegacy
-			}
 			if copyCfg.Timeout <= 0 {
 				copyCfg.Timeout = command.DefaultFetchTimeout
 			}
@@ -499,7 +436,6 @@ func cloneJobWithCredentials(original *job.Job, creds *git.Credentials) *job.Job
 		default:
 			opts = &command.FetchOptions{
 				RemoteName:  defaultRemoteName(original.Repository),
-				CommandMode: command.ModeLegacy,
 				Timeout:     command.DefaultFetchTimeout,
 				Credentials: creds,
 			}
@@ -960,9 +896,8 @@ func (m *Model) runPullForRepo(repo *git.Repository, suppressSuccess bool) tea.C
 	repo.SetWorkStatus(git.Pending)
 	pullCfg := &job.PullJobConfig{
 		Options: &command.PullOptions{
-			RemoteName:  repo.State.Remote.Name,
-			CommandMode: command.ModeLegacy,
-			FFOnly:      true,
+			RemoteName: repo.State.Remote.Name,
+			FFOnly:     true,
 		},
 		SuppressSuccess: suppressSuccess,
 	}
@@ -1011,7 +946,6 @@ func (m *Model) runPushForRepo(repo *git.Repository, force bool, suppressSuccess
 		Options: &command.PushOptions{
 			RemoteName:    repo.State.Remote.Name,
 			ReferenceName: repo.State.Branch.Name,
-			CommandMode:   command.ModeLegacy,
 			Force:         force,
 		},
 		SuppressSuccess: suppressSuccess,
@@ -1028,27 +962,6 @@ func (m *Model) runPushForRepo(repo *git.Repository, force bool, suppressSuccess
 	repo.SetWorkStatus(git.Queued)
 	m.jobsRunning = true
 	return tickCmd()
-}
-
-func (m *Model) enqueueForcePrompt(repo *git.Repository) {
-	if repo == nil {
-		return
-	}
-	if m.activeForcePrompt != nil && m.activeForcePrompt.repo.RepoID == repo.RepoID {
-		return
-	}
-	for _, pending := range m.forcePromptQueue {
-		if pending == nil {
-			continue
-		}
-		if pending.repo != nil && pending.repo.RepoID == repo.RepoID {
-			return
-		}
-	}
-	m.forcePromptQueue = append(m.forcePromptQueue, &forcePushPrompt{repo: repo})
-	if m.activeForcePrompt == nil {
-		m.advanceForcePrompt()
-	}
 }
 
 func (m *Model) advanceForcePrompt() {
@@ -1124,9 +1037,8 @@ func (m *Model) startQueue() tea.Cmd {
 				}
 				j.JobType = job.PullJob
 				j.Options = &command.PullOptions{
-					RemoteName:  r.State.Remote.Name,
-					CommandMode: command.ModeLegacy,
-					FFOnly:      true,
+					RemoteName: r.State.Remote.Name,
+					FFOnly:     true,
 				}
 			case MergeMode:
 				if r.State == nil || r.State.Branch == nil || r.State.Branch.Upstream == nil {
@@ -1139,9 +1051,8 @@ func (m *Model) startQueue() tea.Cmd {
 				}
 				j.JobType = job.RebaseJob
 				j.Options = &command.PullOptions{
-					RemoteName:  r.State.Remote.Name,
-					CommandMode: command.ModeLegacy,
-					Rebase:      true,
+					RemoteName: r.State.Remote.Name,
+					Rebase:     true,
 				}
 			case PushMode:
 				if r.State == nil || r.State.Remote == nil || r.State.Branch == nil {
@@ -1151,7 +1062,6 @@ func (m *Model) startQueue() tea.Cmd {
 				j.Options = &command.PushOptions{
 					RemoteName:    r.State.Remote.Name,
 					ReferenceName: r.State.Branch.Name,
-					CommandMode:   command.ModeLegacy,
 				}
 			default:
 				continue
@@ -1254,9 +1164,8 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 		// Jobs are async and handled by the git queue
 		for _, repo := range repos {
 			opts := &command.FetchOptions{
-				RemoteName:  defaultRemoteName(repo),
-				CommandMode: command.ModeLegacy,
-				Timeout:     command.DefaultFetchTimeout,
+				RemoteName: defaultRemoteName(repo),
+				Timeout:    command.DefaultFetchTimeout,
 			}
 			jobEntry := &job.Job{
 				JobType:    job.FetchJob,

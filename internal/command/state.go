@@ -262,9 +262,8 @@ func scheduleUpstreamVerificationAndFetch(r *git.Repository, remoteName, remoteB
 
 			// Now fetch from the remote
 			opts := FetchOptions{
-				RemoteName:  remoteName,
-				CommandMode: ModeLegacy,
-				Timeout:     DefaultFetchTimeout,
+				RemoteName: remoteName,
+				Timeout:    DefaultFetchTimeout,
 			}
 			msg, err := FetchWithContext(ctx, r, &opts)
 			// Return OperationStateProbe (not OperationFetch) to avoid triggering
@@ -520,45 +519,6 @@ func resolveUpstreamParts(r *git.Repository, branch *git.Branch) (string, string
 	}
 
 	return remoteName, remoteBranch
-}
-
-func scheduleFetchCommand(r *git.Repository, remoteName string) error {
-	if r == nil {
-		return fmt.Errorf("repository not initialized")
-	}
-	if remoteName == "" {
-		remoteName = defaultRemoteName(r)
-	}
-	if remoteName == "" {
-		return fmt.Errorf("remote not set")
-	}
-	opts := FetchOptions{
-		RemoteName:  remoteName,
-		CommandMode: ModeLegacy,
-		Timeout:     DefaultFetchTimeout,
-	}
-	optsCopy := opts
-	req := &GitCommandRequest{
-		Key:       fmt.Sprintf("fetch:%s:%s", r.RepoID, optsCopy.RemoteName),
-		Timeout:   optsCopy.Timeout,
-		Operation: OperationFetch,
-		Execute: func(ctx context.Context) OperationOutcome {
-			msg, err := FetchWithContext(ctx, r, &optsCopy)
-			return OperationOutcome{
-				Operation: OperationFetch,
-				Message:   msg,
-				Err:       err,
-			}
-		},
-	}
-	return ScheduleGitCommand(r, req)
-}
-
-func defaultRemoteName(r *git.Repository) string {
-	if r != nil && r.State != nil && r.State.Remote != nil && r.State.Remote.Name != "" {
-		return r.State.Remote.Name
-	}
-	return "origin"
 }
 
 func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error) {

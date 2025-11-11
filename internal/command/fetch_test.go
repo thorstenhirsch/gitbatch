@@ -22,11 +22,6 @@ var (
 		RemoteName: "origin",
 		DryRun:     true,
 	}
-
-	testFetchopts4 = &FetchOptions{
-		RemoteName: "origin",
-		Progress:   true,
-	}
 )
 
 func TestFetchWithGit(t *testing.T) {
@@ -43,25 +38,6 @@ func TestFetchWithGit(t *testing.T) {
 	}
 	for _, test := range tests {
 		_, err := fetchWithGit(context.Background(), test.inp1, test.inp2)
-		require.NoError(t, err)
-	}
-}
-
-func TestFetchWithGoGit(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
-	defer th.CleanUp(t)
-
-	refspec := "+" + "refs/heads/" + th.Repository.State.Branch.Name + ":" + "/refs/remotes/" + th.Repository.State.Branch.Name
-	var tests = []struct {
-		inp1 *git.Repository
-		inp2 *FetchOptions
-		inp3 string
-	}{
-		{th.Repository, testFetchopts1, refspec},
-		{th.Repository, testFetchopts4, refspec},
-	}
-	for _, test := range tests {
-		_, err := fetchWithGoGit(context.Background(), test.inp1, test.inp2, test.inp3)
 		require.NoError(t, err)
 	}
 }

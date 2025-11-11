@@ -30,27 +30,3 @@ func TestConfigWithGit(t *testing.T) {
 		require.Equal(t, test.expected, output)
 	}
 }
-
-func TestConfigWithGoGit(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
-	defer th.CleanUp(t)
-
-	testConfigopt := &ConfigOptions{
-		Section: "core",
-		Option:  "bare",
-		Site:    ConfigSiteLocal,
-	}
-
-	var tests = []struct {
-		inp1     *git.Repository
-		inp2     *ConfigOptions
-		expected string
-	}{
-		{th.Repository, testConfigopt, "false"},
-	}
-	for _, test := range tests {
-		output, err := configWithGoGit(test.inp1, test.inp2)
-		require.NoError(t, err)
-		require.Equal(t, output, test.expected)
-	}
-}
