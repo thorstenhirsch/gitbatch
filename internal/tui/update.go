@@ -16,27 +16,32 @@ import (
 
 var repositoryUpdateCh = make(chan struct{}, 256)
 
-// lastRepositoryUpdateCheck tracks when we last checked for repository updates
-// to throttle UI refresh rate during heavy update periods
-// lastJobsFlagUpdate tracks when we last updated the jobsRunning flag
+// Throttle timings to prevent event loop starvation and excessive O(n) checks
 var (
 	lastRepositoryUpdateCheck time.Time
 	lastJobsFlagUpdate        time.Time
 	updateCheckMutex          sync.Mutex
 )
 
+// shouldThrottleCheck returns true if enough time has passed since the last check
+func shouldThrottleCheck(lastCheck *time.Time, interval time.Duration) bool {
+	updateCheckMutex.Lock()
+	defer updateCheckMutex.Unlock()
+
+	now := time.Now()
+	if now.Sub(*lastCheck) < interval {
+		return false
+	}
+	*lastCheck = now
+	return true
+}
+
 func listenRepositoryUpdatesCmd() tea.Cmd {
 	return func() tea.Msg {
 		// Throttle to max 30 FPS (33ms) to prevent starving keyboard input
-		// during heavy repository state updates
-		updateCheckMutex.Lock()
-		now := time.Now()
-		if now.Sub(lastRepositoryUpdateCheck) < 33*time.Millisecond {
-			updateCheckMutex.Unlock()
+		if !shouldThrottleCheck(&lastRepositoryUpdateCheck, 33*time.Millisecond) {
 			return nil
 		}
-		lastRepositoryUpdateCheck = now
-		updateCheckMutex.Unlock()
 
 		select {
 		case <-repositoryUpdateCh:
@@ -92,6 +97,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.cursor >= len(m.repositories) {
 			m.cursor = len(m.repositories) - 1
+			// Ensure we're on a navigable repository
+			m.cursor = m.findNextReadyIndex(m.cursor, -1)
 		}
 		m.loading = false
 		// Now that all repos are visible, start the state evaluation
@@ -112,32 +119,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Don't notify during batch loading - will be handled by state evaluation
 			if m.cursor >= len(m.repositories) {
 				m.cursor = len(m.repositories) - 1
+				// Ensure we're on a navigable repository
+				m.cursor = m.findNextReadyIndex(m.cursor, -1)
 			}
 		}
 		m.loading = false
 		return m, withListener()
 
 	case repositoryStateChangedMsg:
-		// Throttle the expensive updateJobsRunningFlag() check
-		// Only update every 100ms to avoid O(n) iteration on every state change
-		updateCheckMutex.Lock()
-		now := time.Now()
-		shouldUpdate := now.Sub(lastJobsFlagUpdate) >= 100*time.Millisecond
-		if shouldUpdate {
-			lastJobsFlagUpdate = now
-		}
-		updateCheckMutex.Unlock()
-
-		if shouldUpdate {
+		// Throttle expensive updateJobsRunningFlag() to avoid O(n) iteration on every state change
+		if shouldThrottleCheck(&lastJobsFlagUpdate, 100*time.Millisecond) {
 			m.updateJobsRunningFlag()
-		}
 
-		// Only schedule tick if jobs are actually running
-		// Avoid scheduling tick on every state change to reduce event loop pressure
-		if m.jobsRunning && shouldUpdate {
-			return m, withListener(tickCmd())
+			// Only schedule tick if jobs are running
+			if m.jobsRunning {
+				return m, withListener(tickCmd())
+			}
 		}
-		// Just listen for updates without scheduling another tick
 		return m, withListener()
 
 	case repositoriesWaitingMsg:
@@ -167,20 +165,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.advanceSpinner()
 		}
 
-		// Throttle updateJobsRunningFlag check here too
-		updateCheckMutex.Lock()
-		now := time.Now()
-		shouldUpdate := now.Sub(lastJobsFlagUpdate) >= 100*time.Millisecond
-		if shouldUpdate {
-			lastJobsFlagUpdate = now
-		}
-		updateCheckMutex.Unlock()
-
-		if shouldUpdate {
+		// Throttle expensive O(n) check
+		if shouldThrottleCheck(&lastJobsFlagUpdate, 100*time.Millisecond) {
 			m.updateJobsRunningFlag()
 		}
 
-		// Only schedule the next tick if jobs are still running
+		// Schedule next tick if jobs are still running
 		if m.jobsRunning {
 			return m, withListener(tickCmd())
 		}
@@ -603,24 +593,20 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g": // First g of gg - we need to check if it's followed by another g
 		// For now, just go to top (single g also works)
-		m.cursor = 0
+		m.cursor = m.findFirstNavigableIndex()
 		m.resetCommitScrollForSelected()
 
 	case "G": // Shift+G goes to end
-		if len(m.repositories) > 0 {
-			m.cursor = len(m.repositories) - 1
-			m.resetCommitScrollForSelected()
-		}
+		m.cursor = m.findLastNavigableIndex()
+		m.resetCommitScrollForSelected()
 
 	case "home":
-		m.cursor = 0
+		m.cursor = m.findFirstNavigableIndex()
 		m.resetCommitScrollForSelected()
 
 	case "end":
-		if len(m.repositories) > 0 {
-			m.cursor = len(m.repositories) - 1
-			m.resetCommitScrollForSelected()
-		}
+		m.cursor = m.findLastNavigableIndex()
+		m.resetCommitScrollForSelected()
 
 	case "ctrl+f", "pgdown": // Ctrl+F and Page Down - scroll forward (down)
 		pageSize := m.height - 5
@@ -895,71 +881,47 @@ func (m *Model) toggleQueue() tea.Cmd {
 	}
 }
 
-// addToQueue adds a repository to the job queue
+// addToQueue marks a repository as queued for later execution.
+// The actual job is started when user presses Enter (startQueue).
 func (m *Model) addToQueue(r *git.Repository) error {
 	if !repoIsActionable(r) {
 		return nil
 	}
 
-	j := &job.Job{
-		Repository: r,
-	}
-
+	// Validate that the repository can be queued based on current mode
 	switch m.mode.ID {
 	case PullMode:
-		if r.State.Branch.Upstream == nil {
+		if r.State == nil || r.State.Branch == nil || r.State.Branch.Upstream == nil || r.State.Remote == nil {
 			return nil
-		}
-		if r.State.Remote == nil {
-			return nil
-		}
-		j.JobType = job.PullJob
-		j.Options = &command.PullOptions{
-			RemoteName:  r.State.Remote.Name,
-			CommandMode: command.ModeLegacy,
-			FFOnly:      true,
 		}
 	case MergeMode:
-		if r.State.Branch.Upstream == nil {
+		if r.State == nil || r.State.Branch == nil || r.State.Branch.Upstream == nil {
 			return nil
 		}
-		j.JobType = job.MergeJob
 	case RebaseMode:
-		if r.State.Branch.Upstream == nil || r.State.Remote == nil {
+		if r.State == nil || r.State.Branch == nil || r.State.Branch.Upstream == nil || r.State.Remote == nil {
 			return nil
-		}
-		j.JobType = job.RebaseJob
-		j.Options = &command.PullOptions{
-			RemoteName:  r.State.Remote.Name,
-			CommandMode: command.ModeLegacy,
-			Rebase:      true,
 		}
 	case PushMode:
-		if r.State.Remote == nil || r.State.Branch == nil {
+		if r.State == nil || r.State.Remote == nil || r.State.Branch == nil {
 			return nil
-		}
-		j.JobType = job.PushJob
-		j.Options = &command.PushOptions{
-			RemoteName:    r.State.Remote.Name,
-			ReferenceName: r.State.Branch.Name,
-			CommandMode:   command.ModeLegacy,
 		}
 	default:
 		return nil
 	}
 
-	if err := j.Start(); err != nil {
-		return err
-	}
-	r.SetWorkStatus(git.Queued)
+	// Just mark as queued - don't start the job yet.
+	// Use silent variant since tagging is UI-only and doesn't reflect actual repository state changes.
+	r.SetWorkStatusSilent(git.Queued)
 
 	return nil
 }
 
-// removeFromQueue is no longer needed since jobs start immediately
-// and are tracked by the git queue. Just update status.
+// removeFromQueue removes a repository from the queue by marking it as available.
+// This is a UI-only operation that doesn't affect the actual repository state.
 func (m *Model) removeFromQueue(r *git.Repository) error {
-	r.SetWorkStatus(git.Available)
+	// Use silent variant since tagging is UI-only and doesn't reflect actual repository state changes
+	r.SetWorkStatusSilent(git.Available)
 	return nil
 }
 
@@ -1142,9 +1104,70 @@ func (m *Model) unqueueAll() tea.Cmd {
 
 // startQueue starts jobs for all queued repositories
 func (m *Model) startQueue() tea.Cmd {
-	m.jobsRunning = true
-	// Jobs are now started immediately, just trigger a tick to update UI
-	return tickCmd()
+	return func() tea.Msg {
+		for _, r := range m.repositories {
+			if r.WorkStatus() != git.Queued {
+				continue
+			}
+
+			j := &job.Job{
+				Repository: r,
+			}
+
+			switch m.mode.ID {
+			case PullMode:
+				if r.State == nil || r.State.Branch == nil || r.State.Branch.Upstream == nil {
+					continue
+				}
+				if r.State.Remote == nil {
+					continue
+				}
+				j.JobType = job.PullJob
+				j.Options = &command.PullOptions{
+					RemoteName:  r.State.Remote.Name,
+					CommandMode: command.ModeLegacy,
+					FFOnly:      true,
+				}
+			case MergeMode:
+				if r.State == nil || r.State.Branch == nil || r.State.Branch.Upstream == nil {
+					continue
+				}
+				j.JobType = job.MergeJob
+			case RebaseMode:
+				if r.State == nil || r.State.Branch == nil || r.State.Branch.Upstream == nil || r.State.Remote == nil {
+					continue
+				}
+				j.JobType = job.RebaseJob
+				j.Options = &command.PullOptions{
+					RemoteName:  r.State.Remote.Name,
+					CommandMode: command.ModeLegacy,
+					Rebase:      true,
+				}
+			case PushMode:
+				if r.State == nil || r.State.Remote == nil || r.State.Branch == nil {
+					continue
+				}
+				j.JobType = job.PushJob
+				j.Options = &command.PushOptions{
+					RemoteName:    r.State.Remote.Name,
+					ReferenceName: r.State.Branch.Name,
+					CommandMode:   command.ModeLegacy,
+				}
+			default:
+				continue
+			}
+
+			// Start the job - this will call SetWorkStatus(git.Working) which is correct
+			// because an actual git operation is starting
+			if err := j.Start(); err != nil {
+				// Job failed to start, mark as available
+				r.SetWorkStatus(git.Available)
+				r.State.Message = fmt.Sprintf("failed to start: %v", err)
+			}
+		}
+		m.jobsRunning = true
+		return jobCompletedMsg{}
+	}
 }
 
 func (m *Model) startFetchForRepos(repos []*git.Repository) tea.Cmd {
@@ -1308,6 +1331,38 @@ func (m *Model) findNextReadyIndex(start int, direction int) int {
 		return count - 1
 	}
 	return start
+}
+
+// findFirstNavigableIndex finds the first navigable repository in the list.
+// Returns 0 if no navigable repository is found.
+func (m *Model) findFirstNavigableIndex() int {
+	count := len(m.repositories)
+	if count == 0 {
+		return 0
+	}
+	for i := 0; i < count; i++ {
+		if repoIsNavigable(m.repositories[i]) {
+			return i
+		}
+	}
+	// No navigable repositories found, return 0
+	return 0
+}
+
+// findLastNavigableIndex finds the last navigable repository in the list.
+// Returns the last index if no navigable repository is found.
+func (m *Model) findLastNavigableIndex() int {
+	count := len(m.repositories)
+	if count == 0 {
+		return 0
+	}
+	for i := count - 1; i >= 0; i-- {
+		if repoIsNavigable(m.repositories[i]) {
+			return i
+		}
+	}
+	// No navigable repositories found, return last index
+	return count - 1
 }
 
 func (m *Model) getCommitScrollOffset(repo *git.Repository) int {

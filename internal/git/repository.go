@@ -114,8 +114,6 @@ type eventQueue struct {
 	handler func(*RepositoryEvent)
 }
 
-const maxConcurrentGitWorkers = 10
-
 var (
 	gitQueueOnce      sync.Once
 	gitQueueSemaphore *semaphore.Weighted
@@ -123,12 +121,10 @@ var (
 
 func gitSemaphore() *semaphore.Weighted {
 	gitQueueOnce.Do(func() {
+		// Use the number of CPU cores for optimal performance on different hardware
 		workers := int64(runtime.GOMAXPROCS(0))
 		if workers < 1 {
 			workers = 1
-		}
-		if workers > maxConcurrentGitWorkers {
-			workers = maxConcurrentGitWorkers
 		}
 		gitQueueSemaphore = semaphore.NewWeighted(workers)
 	})
@@ -447,6 +443,17 @@ func (r *Repository) WorkStatus() WorkStatus {
 
 // SetWorkStatus sets the state of repository and sends repository updated event
 func (r *Repository) SetWorkStatus(ws WorkStatus) {
+	r.setWorkStatus(ws, true)
+}
+
+// SetWorkStatusSilent sets the state of repository without triggering a notification.
+// Use this for UI-only state changes (like tagging) that don't reflect actual repository changes.
+func (r *Repository) SetWorkStatusSilent(ws WorkStatus) {
+	r.setWorkStatus(ws, false)
+}
+
+// setWorkStatus is the internal implementation for setting work status
+func (r *Repository) setWorkStatus(ws WorkStatus, notify bool) {
 	if r.State == nil {
 		return
 	}
@@ -458,7 +465,9 @@ func (r *Repository) SetWorkStatus(ws WorkStatus) {
 	if prev == ws {
 		return
 	}
-	r.NotifyRepositoryUpdated()
+	if notify {
+		r.NotifyRepositoryUpdated()
+	}
 }
 
 // NotifyRepositoryUpdated emits a repository.updated event without mutating state.
