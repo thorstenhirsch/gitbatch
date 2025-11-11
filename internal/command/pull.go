@@ -1,21 +1,15 @@
 package command
 
 import (
-	"os"
-	"strings"
+	"context"
 
-	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/storage"
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
 var (
 	pullTryCount int
-	pullMaxTry   = 1
 )
 
 // PullOptions defines the rules for pull operation
@@ -37,35 +31,27 @@ type PullOptions struct {
 	FFOnly bool
 	// Rebase performs the pull using rebase instead of merge.
 	Rebase bool
-	// Mode is the command mode
-	CommandMode Mode
 }
 
 // Pull incorporates changes from a remote repository into the current branch.
-func Pull(r *git.Repository, o *PullOptions) (err error) {
+func Pull(r *git.Repository, o *PullOptions) (string, error) {
+	return PullWithContext(context.Background(), r, o)
+}
+
+// PullWithContext performs pull respecting context cancellation and deadlines.
+func PullWithContext(ctx context.Context, r *git.Repository, o *PullOptions) (string, error) {
 	pullTryCount = 0
 
 	if o == nil {
-		return nil
+		return "", nil
 	}
-
-	// here we configure pull operation
-	if o.CommandMode == ModeNative && (o.FFOnly || o.Rebase) {
-		return pullWithGit(r, o)
+	if ctx == nil {
+		ctx = context.Background()
 	}
-
-	switch o.CommandMode {
-	case ModeLegacy:
-		err = pullWithGit(r, o)
-		return err
-	case ModeNative:
-		err = pullWithGoGit(r, o)
-		return err
-	}
-	return nil
+	return pullWithGit(ctx, r, o)
 }
 
-func pullWithGit(r *git.Repository, options *PullOptions) (err error) {
+func pullWithGit(ctx context.Context, r *git.Repository, options *PullOptions) (string, error) {
 	args := make([]string, 0)
 	args = append(args, "pull")
 	// parse options to command line arguments
@@ -85,85 +71,21 @@ func pullWithGit(r *git.Repository, options *PullOptions) (err error) {
 		args = append(args, options.ReferenceName)
 	}
 	ref, _ := r.Repo.Head()
-	if out, err := Run(r.AbsPath, "git", args); err != nil {
-		return gerr.ParseGitError(out, err)
+	if out, err := RunWithContext(ctx, r.AbsPath, "git", args); err != nil {
+		return "", gerr.ParseGitError(out, err)
 	}
 	newref, _ := r.Repo.Head()
-	r.SetWorkStatus(git.Success)
-	msg, err := getMergeMessage(r, ref.Hash().String(), newref.Hash().String())
+
+	msg, err := getMergeMessage(r, referenceHash(ref), referenceHash(newref))
 	if err != nil {
 		msg = "couldn't get stat"
 	}
-	r.State.Message = msg
-	return r.Refresh()
+	return msg, nil
 }
 
-func pullWithGoGit(r *git.Repository, options *PullOptions) (err error) {
-	if options.FFOnly || options.Rebase {
-		return pullWithGit(r, options)
+func referenceHash(ref *plumbing.Reference) string {
+	if ref == nil {
+		return ""
 	}
-
-	opt := &gogit.PullOptions{
-		RemoteName:   options.RemoteName,
-		SingleBranch: options.SingleBranch,
-		Force:        options.Force,
-	}
-	if len(options.ReferenceName) > 0 {
-		ref := plumbing.NewRemoteReferenceName(options.RemoteName, options.ReferenceName)
-		opt.ReferenceName = ref
-	}
-	// if any credential is given, let's add it to the git.PullOptions
-	if options.Credentials != nil {
-		protocol, err := git.AuthProtocol(r.State.Remote)
-		if err != nil {
-			return err
-		}
-		if protocol == git.AuthProtocolHTTP || protocol == git.AuthProtocolHTTPS {
-			opt.Auth = &http.BasicAuth{
-				Username: options.Credentials.User,
-				Password: options.Credentials.Password,
-			}
-		} else {
-			return gerr.ErrInvalidAuthMethod
-		}
-	}
-	if options.Progress {
-		opt.Progress = os.Stdout
-	}
-	w, err := r.Repo.Worktree()
-	if err != nil {
-		return err
-	}
-	ref, _ := r.Repo.Head()
-	if err = w.Pull(opt); err != nil {
-		if err == gogit.NoErrAlreadyUpToDate {
-			// log.Error("error: " + err.Error())
-			// Already up-to-date
-			// TODO: submit a PR for this kind of error, this type of catch is lame
-		} else if err == storage.ErrReferenceHasChanged && pullTryCount < pullMaxTry {
-			pullTryCount++
-			if err := Fetch(r, &FetchOptions{
-				RemoteName: options.RemoteName,
-			}); err != nil {
-				return err
-			}
-			return Pull(r, options)
-		} else if strings.Contains(err.Error(), "SSH_AUTH_SOCK") {
-			// The env variable SSH_AUTH_SOCK is not defined, maybe git can handle this
-			return pullWithGit(r, options)
-		} else if err == transport.ErrAuthenticationRequired {
-			return gerr.ErrAuthenticationRequired
-		} else {
-			return pullWithGit(r, options)
-		}
-	}
-	newref, _ := r.Repo.Head()
-
-	msg, err := getMergeMessage(r, ref.Hash().String(), newref.Hash().String())
-	if err != nil {
-		msg = "couldn't get stat"
-	}
-	r.SetWorkStatus(git.Success)
-	r.State.Message = msg
-	return r.Refresh()
+	return ref.Hash().String()
 }

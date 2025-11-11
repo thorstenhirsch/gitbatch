@@ -33,12 +33,6 @@ const (
 	minTerminalHeight = 8
 )
 
-type columnWidths struct {
-	repo      int
-	branch    int
-	commitMsg int
-}
-
 var commonPanelBorderColor = lipgloss.AdaptiveColor{Light: "#FB8C00", Dark: "#FFB74D"}
 
 const (
@@ -64,11 +58,22 @@ func (m *Model) overviewTableBodyHeight() int {
 	return visible + 2
 }
 
+// getColumnWidths returns cached column widths, recalculating only when necessary
+func (m *Model) getColumnWidths() columnWidths {
+	// Check if we need to recalculate
+	if m.cachedWidth != m.width || m.cachedRepoCount != len(m.repositories) {
+		m.cachedColWidths = calculateColumnWidths(m.width, m.repositories)
+		m.cachedWidth = m.width
+		m.cachedRepoCount = len(m.repositories)
+	}
+	return m.cachedColWidths
+}
+
 func (m *Model) overviewTableWidth() int {
 	if m.width <= 0 {
 		return 0
 	}
-	widths := calculateColumnWidths(m.width, m.repositories)
+	widths := m.getColumnWidths()
 	total := widths.repo + widths.branch + widths.commitMsg + 4
 	if total > m.width {
 		total = m.width
@@ -490,8 +495,8 @@ func (m *Model) renderOverview() string {
 		}
 	}
 
-	// Compute column widths based on content and available width
-	colWidths := calculateColumnWidths(m.width, m.repositories)
+	// Compute column widths based on content and available width (cached)
+	colWidths := m.getColumnWidths()
 
 	title := m.renderOverviewTitleBar()
 
@@ -544,10 +549,12 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	status := r.WorkStatus()
 	dirty := repoIsDirty(r)
 	failed := status == git.Fail
+	recoverable := failed && r.State != nil && r.State.RecoverableError
 
 	switch status {
 	case git.Pending:
 		statusIcon = waitingSymbol
+		style = m.styles.PendingItem
 	case git.Queued:
 		statusIcon = queuedSymbol
 		style = m.styles.QueuedItem
@@ -563,11 +570,17 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		style = m.styles.SuccessItem
 	case git.Fail:
 		statusIcon = failSymbol
-		style = m.styles.FailedItem
+		if recoverable {
+			style = m.styles.RecoverableFailedItem
+		} else {
+			style = m.styles.FailedItem
+		}
 	}
-	if dirty && !failed {
+	// Only show dirty symbol when state evaluation is complete (status.Ready).
+	// During evaluation (Working), keep showing the spinner.
+	if dirty && !failed && status.Ready {
 		statusIcon = dirtySymbol
-		style = m.styles.DisabledItem
+		style = m.styles.DirtyItem
 	}
 
 	cursor := " "
@@ -582,7 +595,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	repoName := truncateString(r.Name, repoNameWidth)
 	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
 	if dirty && !failed && !selected {
-		repoColumn = m.styles.DisabledItem.Render(repoColumn)
+		repoColumn = m.styles.DirtyItem.Render(repoColumn)
 	}
 
 	branchContentWidth := colWidths.branch - 1
@@ -592,7 +605,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	branchContent := truncateString(branchContent(r), branchContentWidth)
 	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
 	if dirty && !failed && !selected {
-		branchColumn = m.styles.DisabledItem.Render(branchColumn)
+		branchColumn = m.styles.DirtyItem.Render(branchColumn)
 	}
 
 	commitContentWidth := colWidths.commitMsg - 1
@@ -613,13 +626,15 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	commitContent := visibleCommitContent(fullCommitContent, offset, commitContentWidth)
 	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
 	if dirty && !failed && !selected {
-		commitColumn = m.styles.DisabledItem.Render(commitColumn)
+		commitColumn = m.styles.DirtyItem.Render(commitColumn)
 	}
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
 	if selected {
 		var highlight lipgloss.Style
 		switch {
+		case recoverable:
+			highlight = m.styles.RecoverableFailedSelectedItem
 		case failed:
 			highlight = m.styles.FailedSelectedItem
 		case dirty:
@@ -1383,6 +1398,7 @@ func (m *Model) renderStatusBar() string {
 	focusRepo := m.currentRepository()
 	dirty := repoIsDirty(focusRepo)
 	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
+	recoverable := failed && focusRepo.State != nil && focusRepo.State.RecoverableError
 
 	center := ""
 
@@ -1427,18 +1443,30 @@ func (m *Model) renderStatusBar() string {
 		center = truncateString(fmt.Sprintf("%s: %s", label, display), maxCenter)
 	} else {
 		if failed {
-			statusBarStyle = m.styles.StatusBarError
-			left = " repo failed"
-			right = "c: clear"
-			rightWidth = lipgloss.Width(right)
-			maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
-			if maxCenter < 0 {
-				maxCenter = 0
-			}
+			message := "Operation failed"
 			if focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != "" {
-				center = truncateString(singleLineMessage(focusRepo.State.Message), maxCenter)
+				message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
+			}
+			if recoverable {
+				statusBarStyle = m.styles.StatusBarRecoverable
+				left = " repo needs attention"
+				right = "c: clear | TAB: lazygit"
+				rightWidth = lipgloss.Width(right)
+				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+				if maxCenter < 0 {
+					maxCenter = 0
+				}
+				center = truncateString(message, maxCenter)
 			} else {
-				center = "Operation failed"
+				statusBarStyle = m.styles.StatusBarError
+				left = " repo failed"
+				right = "c: clear"
+				rightWidth = lipgloss.Width(right)
+				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+				if maxCenter < 0 {
+					maxCenter = 0
+				}
+				center = truncateString(message, maxCenter)
 			}
 		} else if dirty {
 			statusBarStyle = m.styles.StatusBarDirty

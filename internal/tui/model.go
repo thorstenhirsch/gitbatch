@@ -13,19 +13,18 @@ type Model struct {
 	repositories []*git.Repository
 	directories  []string
 	mode         Mode
-	queue        *job.Queue
 	spinnerIndex int
 	version      string
 
 	// UI state
-	cursor              int
-	width               int
-	height              int
-	ready               bool
-	initialFetchStarted bool
-	loading             bool
-	jobsRunning         bool
-	err                 error
+	cursor                   int
+	width                    int
+	height                   int
+	ready                    bool
+	initialStateProbeStarted bool
+	loading                  bool
+	jobsRunning              bool
+	err                      error
 
 	// View state
 	currentView            ViewType
@@ -46,6 +45,11 @@ type Model struct {
 	credentialInputField   credentialField
 	credentialInputBuffer  string
 
+	// Performance caching
+	cachedColWidths columnWidths
+	cachedWidth     int
+	cachedRepoCount int
+
 	// Styles
 	styles *Styles
 }
@@ -57,6 +61,13 @@ const (
 	OverviewView ViewType = iota
 	FocusView
 )
+
+// columnWidths holds the calculated widths for table columns
+type columnWidths struct {
+	repo      int
+	branch    int
+	commitMsg int
+}
 
 // SidePanelType represents which side panel is active
 type SidePanelType int
@@ -121,38 +132,40 @@ var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#42A5F5"
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
-	App                lipgloss.Style
-	Title              lipgloss.Style
-	StatusBarPull      lipgloss.Style
-	StatusBarMerge     lipgloss.Style
-	StatusBarRebase    lipgloss.Style
-	StatusBarPush      lipgloss.Style
-	StatusBarDirty     lipgloss.Style
-	StatusBarError     lipgloss.Style
-	Help               lipgloss.Style
-	List               lipgloss.Style
-	ListItem           lipgloss.Style
-	SelectedItem       lipgloss.Style
-	DirtySelectedItem  lipgloss.Style
-	CommonSelectedItem lipgloss.Style
-	FailedSelectedItem lipgloss.Style
-	QueuedItem         lipgloss.Style
-	WorkingItem        lipgloss.Style
-	SuccessItem        lipgloss.Style
-	FailedItem         lipgloss.Style
-	DisabledItem       lipgloss.Style
-	BranchInfo         lipgloss.Style
-	KeyBinding         lipgloss.Style
-	Panel              lipgloss.Style
-	PanelTitle         lipgloss.Style
-	Error              lipgloss.Style
-	TableBorder        lipgloss.Style
+	Title                         lipgloss.Style
+	StatusBarPull                 lipgloss.Style
+	StatusBarMerge                lipgloss.Style
+	StatusBarRecoverable          lipgloss.Style
+	StatusBarRebase               lipgloss.Style
+	StatusBarPush                 lipgloss.Style
+	StatusBarDirty                lipgloss.Style
+	StatusBarError                lipgloss.Style
+	Help                          lipgloss.Style
+	List                          lipgloss.Style
+	ListItem                      lipgloss.Style
+	RecoverableFailedSelectedItem lipgloss.Style
+	SelectedItem                  lipgloss.Style
+	DirtySelectedItem             lipgloss.Style
+	CommonSelectedItem            lipgloss.Style
+	FailedSelectedItem            lipgloss.Style
+	RecoverableFailedItem         lipgloss.Style
+	QueuedItem                    lipgloss.Style
+	PendingItem                   lipgloss.Style
+	WorkingItem                   lipgloss.Style
+	SuccessItem                   lipgloss.Style
+	FailedItem                    lipgloss.Style
+	DirtyItem                     lipgloss.Style
+	BranchInfo                    lipgloss.Style
+	KeyBinding                    lipgloss.Style
+	Panel                         lipgloss.Style
+	PanelTitle                    lipgloss.Style
+	Error                         lipgloss.Style
+	TableBorder                   lipgloss.Style
 }
 
 // DefaultStyles returns the default style set
 func DefaultStyles() *Styles {
 	return &Styles{
-		App: lipgloss.NewStyle(),
 		Title: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
@@ -171,8 +184,8 @@ func DefaultStyles() *Styles {
 			Background(lipgloss.AdaptiveColor{Light: "#A5D6A7", Dark: "#43A047"}).
 			Padding(0, 1),
 		StatusBarDirty: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#4E342E", Dark: "#D7CCC8"}).
-			Background(lipgloss.AdaptiveColor{Light: "#D7CCC8", Dark: "#4E342E"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#F5F5F5"}).
+			Background(lipgloss.AdaptiveColor{Light: "#D7CCC8", Dark: "#4A3728"}).
 			Padding(0, 1),
 		StatusBarError: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
@@ -182,10 +195,13 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
 			Background(lipgloss.AdaptiveColor{Light: "#FFF59D", Dark: "#FDD835"}).
 			Padding(0, 1),
+		StatusBarRecoverable: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#FFF3E0"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFE0B2", Dark: "#FB8C00"}).
+			Padding(0, 1),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
-		List: lipgloss.NewStyle().
-			Padding(1, 2),
+		List:     lipgloss.NewStyle(),
 		ListItem: lipgloss.NewStyle(),
 		SelectedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#0B0B0B", Dark: "#F5F5F5"}).
@@ -196,24 +212,31 @@ func DefaultStyles() *Styles {
 			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
 			Bold(true),
 		DirtySelectedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#424242", Dark: "#BDBDBD"}).
-			Background(lipgloss.AdaptiveColor{Light: "#E0E0E0", Dark: "#424242"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#F5F5F5"}).
+			Background(lipgloss.AdaptiveColor{Light: "#D7CCC8", Dark: "#4A3728"}).
 			Bold(true),
 		FailedSelectedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#C62828"}).
 			Bold(true),
+		RecoverableFailedSelectedItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#3E2723", Dark: "#FFF3E0"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
+			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
 			Foreground(tagHighlightColor),
+		PendingItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#9E9E9E", Dark: "#757575"}),
 		WorkingItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#0097A7", Dark: "#4DD0E1"}),
 		SuccessItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#388E3C", Dark: "#81C784"}),
 		FailedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}),
-		DisabledItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#9E9E9E", Dark: "#616161"}).
-			Faint(true),
+		RecoverableFailedItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#EF6C00", Dark: "#FFA726"}),
+		DirtyItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#9A7B4F"}),
 		BranchInfo: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#00796B", Dark: "#4DB6AC"}),
 		KeyBinding: lipgloss.NewStyle().
@@ -247,7 +270,6 @@ func New(mode string, directories []string) *Model {
 	return &Model{
 		directories:         directories,
 		mode:                initialMode,
-		queue:               job.CreateJobQueue(),
 		repositories:        make([]*git.Repository, 0),
 		currentView:         OverviewView,
 		sidePanel:           NonePanel,
@@ -262,7 +284,7 @@ func New(mode string, directories []string) *Model {
 
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
-	return loadRepositoriesCmd(m.directories)
+	return tea.Batch(loadRepositoriesCmd(m.directories), listenRepositoryUpdatesCmd(), tickCmd())
 }
 
 func (m *Model) terminalTooSmall() bool {
@@ -274,6 +296,19 @@ type repositoriesLoadedMsg struct {
 	repos []*git.Repository
 }
 
+// repositoryLoadedMsg streams repositories as they finish initializing.
+type repositoryLoadedMsg struct {
+	repo      *git.Repository
+	err       error
+	nextIndex int
+}
+
+// repositoryStateChangedMsg notifies the TUI that a repository triggered a RepositoryUpdated event.
+type repositoryStateChangedMsg struct{}
+
+// repositoriesWaitingMsg signals that repositories should render in waiting state immediately after scheduling state probes.
+type repositoriesWaitingMsg struct{}
+
 // errMsg is sent when an error occurs
 type errMsg struct {
 	err error
@@ -282,16 +317,12 @@ type errMsg struct {
 func (e errMsg) Error() string { return e.err.Error() }
 
 // lazygitClosedMsg is sent when lazygit exits
-type lazygitClosedMsg struct{}
+type lazygitClosedMsg struct {
+	repo *git.Repository
+}
 
 // jobCompletedMsg is sent when a job completes (success or failure)
 type jobCompletedMsg struct{}
-
-// jobQueueResultMsg delivers the outcome of an async job queue execution
-type jobQueueResultMsg struct {
-	resetMainQueue bool
-	failures       map[*job.Job]error
-}
 
 // autoFetchFailedMsg signals non-fatal fetch failures during initial load
 type autoFetchFailedMsg struct {

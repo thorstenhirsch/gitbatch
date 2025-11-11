@@ -60,6 +60,21 @@ func (s LastModified) Less(i, j int) bool {
 	return s[i].ModTime.Unix() > s[j].ModTime.Unix()
 }
 
+// CommitTime slice is the re-ordered *object.Commit slice that sorted according
+// commit date
+type CommitTime []*object.Commit
+
+// Len is the interface implementation for CommitTime sorting function
+func (s CommitTime) Len() int { return len(s) }
+
+// Swap is the interface implementation for CommitTime sorting function
+func (s CommitTime) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+
+// Less is the interface implementation for CommitTime sorting function
+func (s CommitTime) Less(i, j int) bool {
+	return s[i].Author.When.Unix() > s[j].Author.When.Unix()
+}
+
 // Less returns a comparison between to repositories by name
 func Less(ri, rj *Repository) bool {
 	iRunes := []rune(ri.Name)
@@ -87,19 +102,4 @@ func Less(ri, rj *Repository) bool {
 		}
 	}
 	return false
-}
-
-// CommitTime slice is the re-ordered *object.Commit slice that sorted according
-// commit date
-type CommitTime []*object.Commit
-
-// Len is the interface implementation for LastModified sorting function
-func (s CommitTime) Len() int { return len(s) }
-
-// Swap is the interface implementation for LastModified sorting function
-func (s CommitTime) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
-
-// Less is the interface implementation for LastModified sorting function
-func (s CommitTime) Less(i, j int) bool {
-	return s[i].Author.When.Unix() > s[j].Author.When.Unix()
 }

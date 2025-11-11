@@ -89,7 +89,7 @@ func (b *Branch) initCommits(r *Repository) error {
 // to *its* configured upstream
 func (b *Branch) pullDiffsToUpstream(r *Repository) ([]*Commit, error) {
 	remoteCommits := make([]*Commit, 0)
-	if r.State.Branch.Upstream == nil {
+	if b.Upstream == nil || b.Upstream.Reference == nil {
 		return remoteCommits, nil
 	}
 	head := b.Reference.Hash().String()
@@ -113,7 +113,7 @@ func (b *Branch) pullDiffsToUpstream(r *Repository) ([]*Commit, error) {
 // upstream of the specific branch
 func (b *Branch) pushDiffsToUpstream(r *Repository) ([]*Commit, error) {
 	notPushedCommits := make([]*Commit, 0)
-	if r.State.Branch.Upstream == nil {
+	if b.Upstream == nil || b.Upstream.Reference == nil {
 		return notPushedCommits, nil
 	}
 	head := b.Reference.Hash().String()

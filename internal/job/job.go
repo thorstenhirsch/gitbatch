@@ -1,10 +1,12 @@
 package job
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/thorstenhirsch/gitbatch/internal/command"
-	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -16,13 +18,6 @@ type Job struct {
 	Repository *git.Repository
 	// Options is a placeholder for operation options
 	Options interface{}
-}
-
-func markRepoDirty(repo *git.Repository) {
-	if repo == nil || repo.State == nil || repo.State.Branch == nil {
-		return
-	}
-	repo.State.Branch.Clean = false
 }
 
 // Type is the a git operation supported
@@ -58,8 +53,9 @@ type PushJobConfig struct {
 	AllowForce      bool
 }
 
-// starts the job
-func (j *Job) start() error {
+// Start executes the job by scheduling the appropriate git command.
+// The job will be processed asynchronously by the git queue.
+func (j *Job) Start() error {
 	j.Repository.SetWorkStatus(git.Working)
 	// TODO: Better implementation required
 	switch mode := j.JobType; mode {
@@ -74,21 +70,44 @@ func (j *Job) start() error {
 				remoteName = j.Repository.State.Remote.Name
 			}
 			opts = &command.FetchOptions{
-				RemoteName:  remoteName,
-				CommandMode: command.ModeLegacy,
-				Timeout:     command.DefaultFetchTimeout,
+				RemoteName: remoteName,
+				Timeout:    command.DefaultFetchTimeout,
 			}
 		}
-		if err := command.Fetch(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
+		if branch := j.Repository.State.Branch; branch != nil && branch.Upstream != nil {
+			if branch.Upstream.Reference == nil {
+				recoverable := true
+				upstreamName := strings.TrimSpace(branch.Upstream.Name)
+				msg := "upstream missing on remote"
+				if upstreamName != "" {
+					msg = fmt.Sprintf("upstream %s missing on remote", upstreamName)
+				}
+				command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+					Operation:           command.OperationFetch,
+					Err:                 errors.New(msg),
+					Message:             msg,
+					RecoverableOverride: &recoverable,
+				})
+				return nil
 			}
-			markRepoDirty(j.Repository)
+		}
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("fetch:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   optsCopy.Timeout,
+			Operation: command.OperationFetch,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.FetchWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationFetch,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		j.Repository.SetWorkStatus(git.Available)
-		j.Repository.State.Message = ""
 	case PullJob:
 		j.Repository.State.Message = "pulling.."
 		var (
@@ -112,75 +131,99 @@ func (j *Job) start() error {
 		if opts == nil {
 			opts = &command.PullOptions{}
 		}
-		if j.Repository.State.Branch.Upstream == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "upstream not set"
-			}
-			markRepoDirty(j.Repository)
+		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
+			recoverable := true
+			msg := "upstream not set"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation:           command.OperationPull,
+				Err:                 errors.New(msg),
+				Message:             msg,
+				RecoverableOverride: &recoverable,
+			})
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "remote not set"
-			}
-			markRepoDirty(j.Repository)
+			recoverable := false
+			msg := "remote not set"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation:           command.OperationPull,
+				Err:                 errors.New(msg),
+				Message:             msg,
+				RecoverableOverride: &recoverable,
+			})
 			return nil
 		}
 		opts = ensurePullOptions(opts, j.Repository, true, false)
-		if err := command.Pull(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("pull:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationPull,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation:       command.OperationPull,
+					Message:         msg,
+					Err:             err,
+					SuppressSuccess: suppress,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		if suppress {
-			j.Repository.SetWorkStatus(git.Available)
-		} else {
-			j.Repository.SetWorkStatus(git.Success)
-		}
-		j.Repository.State.Message = "pull completed"
 	case MergeJob:
 		j.Repository.State.Message = "merging.."
-		if j.Repository.State.Branch.Upstream == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "upstream not set"
-			}
-			markRepoDirty(j.Repository)
+		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
+			recoverable := true
+			msg := "upstream not set"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation:           command.OperationMerge,
+				Err:                 errors.New(msg),
+				Message:             msg,
+				RecoverableOverride: &recoverable,
+			})
 			return nil
 		}
-		if err := command.Merge(j.Repository, &command.MergeOptions{
-			BranchName: j.Repository.State.Branch.Upstream.Name,
-		}); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
+		optsCopy := command.MergeOptions{BranchName: j.Repository.State.Branch.Upstream.Name}
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("merge:%s:%s", j.Repository.RepoID, optsCopy.BranchName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationMerge,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.MergeWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationMerge,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		j.Repository.SetWorkStatus(git.Success)
-		j.Repository.State.Message = "merge completed"
 	case RebaseJob:
 		j.Repository.State.Message = "rebasing.."
-		if j.Repository.State.Branch.Upstream == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "upstream not set"
-			}
-			markRepoDirty(j.Repository)
+		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
+			recoverable := true
+			msg := "upstream not set"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation:           command.OperationRebase,
+				Err:                 errors.New(msg),
+				Message:             msg,
+				RecoverableOverride: &recoverable,
+			})
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "remote not set"
-			}
-			markRepoDirty(j.Repository)
+			recoverable := false
+			msg := "remote not set"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation:           command.OperationRebase,
+				Err:                 errors.New(msg),
+				Message:             msg,
+				RecoverableOverride: &recoverable,
+			})
 			return nil
 		}
 		var opts *command.PullOptions
@@ -190,32 +233,45 @@ func (j *Job) start() error {
 			opts = &command.PullOptions{}
 		}
 		opts = ensurePullOptions(opts, j.Repository, false, true)
-		if err := command.Pull(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("rebase:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationRebase,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationRebase,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		j.Repository.SetWorkStatus(git.Success)
-		j.Repository.State.Message = "rebase completed"
 	case PushJob:
 		j.Repository.State.Message = "pushing.."
-		if j.Repository.State.Remote == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "remote not set"
-			}
-			markRepoDirty(j.Repository)
+		if j.Repository.State == nil || j.Repository.State.Remote == nil {
+			recoverable := false
+			msg := "remote not set"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation:           command.OperationPush,
+				Err:                 errors.New(msg),
+				Message:             msg,
+				RecoverableOverride: &recoverable,
+			})
 			return nil
 		}
 		if j.Repository.State.Branch == nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = "branch not set"
-			}
-			markRepoDirty(j.Repository)
+			recoverable := false
+			msg := "branch not set"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation:           command.OperationPush,
+				Err:                 errors.New(msg),
+				Message:             msg,
+				RecoverableOverride: &recoverable,
+			})
 			return nil
 		}
 		var (
@@ -240,20 +296,24 @@ func (j *Job) start() error {
 			opts = &command.PushOptions{}
 		}
 		opts = ensurePushOptions(opts, j.Repository)
-		if err := command.Push(j.Repository, opts); err != nil {
-			j.Repository.SetWorkStatus(git.Fail)
-			if j.Repository.State != nil {
-				j.Repository.State.Message = cleanErrorMessage(err.Error())
-			}
-			markRepoDirty(j.Repository)
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("push:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationPush,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.PushWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation:       command.OperationPush,
+					Message:         msg,
+					Err:             err,
+					SuppressSuccess: suppress,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
 			return err
 		}
-		if suppress {
-			j.Repository.SetWorkStatus(git.Available)
-		} else {
-			j.Repository.SetWorkStatus(git.Success)
-		}
-		j.Repository.State.Message = "push completed"
 	default:
 		j.Repository.SetWorkStatus(git.Available)
 		return nil
@@ -273,13 +333,6 @@ func ensurePullOptions(opts *command.PullOptions, repo *git.Repository, ffOnly, 
 
 	if opts.RemoteName == "" {
 		opts.RemoteName = remoteName
-	}
-	// Force CLI execution to respect ff-only/rebase options
-	if opts.CommandMode == command.ModeNative {
-		opts.CommandMode = command.ModeLegacy
-	}
-	if opts.CommandMode != command.ModeLegacy && opts.CommandMode != command.ModeNative {
-		opts.CommandMode = command.ModeLegacy
 	}
 	if opts.ReferenceName == "" {
 		if branch := branchNameForPull(repo); branch != "" {
@@ -309,9 +362,6 @@ func ensurePushOptions(opts *command.PushOptions, repo *git.Repository) *command
 	if opts.ReferenceName == "" && repo.State.Branch != nil && repo.State.Branch.Name != "" {
 		opts.ReferenceName = repo.State.Branch.Name
 	}
-	if opts.CommandMode != command.ModeLegacy && opts.CommandMode != command.ModeNative {
-		opts.CommandMode = command.ModeLegacy
-	}
 	return opts
 }
 
@@ -326,22 +376,4 @@ func branchNameForPull(repo *git.Repository) string {
 		}
 	}
 	return repo.State.Branch.Name
-}
-
-func cleanErrorMessage(msg string) string {
-	msg = strings.ReplaceAll(msg, "\r", " ")
-	msg = strings.ReplaceAll(msg, "\n", " ")
-	msg = strings.TrimSpace(msg)
-	msg = strings.TrimPrefix(msg, gerr.ErrUnclassified.Error()+": ")
-	if msg == gerr.ErrUnclassified.Error() {
-		msg = ""
-	}
-	if msg == "" {
-		return "unknown error"
-	}
-	fields := strings.Fields(msg)
-	if len(fields) == 0 {
-		return "unknown error"
-	}
-	return strings.Join(fields, " ")
 }

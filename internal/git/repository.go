@@ -1,12 +1,17 @@
 package git
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"golang.org/x/sync/semaphore"
 )
 
 // Reference is the interface for commits, remotes and branches
@@ -31,14 +36,16 @@ type Repository struct {
 
 	mutex     *sync.RWMutex
 	listeners map[string][]RepositoryListener
+	queues    map[eventQueueType]*eventQueue
 }
 
 // RepositoryState is the current pointers of a repository
 type RepositoryState struct {
-	workStatus WorkStatus
-	Branch     *Branch
-	Remote     *Remote
-	Message    string
+	workStatus       WorkStatus
+	Branch           *Branch
+	Remote           *Remote
+	Message          string
+	RecoverableError bool
 }
 
 // RepositoryListener is a type for listeners
@@ -47,8 +54,9 @@ type RepositoryListener func(event *RepositoryEvent) error
 // RepositoryEvent is used to transfer event-related data.
 // It is passed to listeners when Publish() is called
 type RepositoryEvent struct {
-	Name string
-	Data interface{}
+	Name    string
+	Data    interface{}
+	Context context.Context
 }
 
 // WorkStatus is the state of the repository for an operation
@@ -79,7 +87,77 @@ const (
 	RepositoryUpdated = "repository.updated"
 	// BranchUpdated defines the topic for an updated branch.
 	BranchUpdated = "branch.updated"
+	// RepositoryRefreshRequested signals that a repository should reload its metadata.
+	RepositoryRefreshRequested = "repository.refresh.requested"
+	// RepositoryEvaluationRequested signals that a repository's state should be re-evaluated.
+	RepositoryEvaluationRequested = "repository.evaluation.requested"
+	// RepositoryGitCommandRequested schedules execution of a git command on the git queue.
+	RepositoryGitCommandRequested = "repository.git.command.requested"
+	// RepositoryEventTraced is an internal event used to route trace logging messages.
+	RepositoryEventTraced = "repository.event.traced"
 )
+
+type eventQueueType uint8
+
+const (
+	queueGit eventQueueType = iota
+	queueState
+	queueLog
+)
+
+type eventQueue struct {
+	repo    *Repository
+	kind    eventQueueType
+	mu      sync.Mutex
+	events  chan *RepositoryEvent
+	started bool
+	handler func(*RepositoryEvent)
+}
+
+var (
+	gitQueueOnce      sync.Once
+	gitQueueSemaphore *semaphore.Weighted
+)
+
+func gitSemaphore() *semaphore.Weighted {
+	gitQueueOnce.Do(func() {
+		// Use the number of CPU cores for optimal performance on different hardware
+		workers := int64(runtime.GOMAXPROCS(0))
+		if workers < 1 {
+			workers = 1
+		}
+		gitQueueSemaphore = semaphore.NewWeighted(workers)
+	})
+	return gitQueueSemaphore
+}
+
+// RepositoryHook represents a function that is executed after a repository has been initialized.
+type RepositoryHook func(*Repository)
+
+var (
+	repositoryHooksMu sync.RWMutex
+	repositoryHooks   []RepositoryHook
+)
+
+// RegisterRepositoryHook registers a hook that will run whenever a repository is created.
+func RegisterRepositoryHook(h RepositoryHook) {
+	if h == nil {
+		return
+	}
+	repositoryHooksMu.Lock()
+	repositoryHooks = append(repositoryHooks, h)
+	repositoryHooksMu.Unlock()
+}
+
+func runRepositoryHooks(r *Repository) {
+	repositoryHooksMu.RLock()
+	defer repositoryHooksMu.RUnlock()
+	for _, hook := range repositoryHooks {
+		if hook != nil {
+			hook(r)
+		}
+	}
+}
 
 // FastInitializeRepo initializes a Repository struct without its belongings.
 func FastInitializeRepo(dir string) (r *Repository, err error) {
@@ -101,12 +179,15 @@ func FastInitializeRepo(dir string) (r *Repository, err error) {
 		ModTime: fstat.ModTime(),
 		Repo:    *rp,
 		State: &RepositoryState{
-			workStatus: Available,
-			Message:    "",
+			workStatus:       Pending,
+			Message:          "waiting",
+			RecoverableError: false,
 		},
 		mutex:     &sync.RWMutex{},
 		listeners: make(map[string][]RepositoryListener),
 	}
+	r.initEventQueues()
+	runRepositoryHooks(r)
 	return r, nil
 }
 
@@ -146,44 +227,6 @@ func (r *Repository) Refresh() error {
 		return nil
 	}
 
-	// Check if we need to update modification time (avoid unnecessary file operations)
-	fstat, err := os.Stat(r.AbsPath)
-	if err != nil {
-		return err
-	}
-
-	// Only reload if the directory has been modified
-	if !fstat.ModTime().After(r.ModTime) {
-		return nil
-	}
-
-	// re-initialize the go-git repository struct after supposed update
-	rp, err := git.PlainOpen(r.AbsPath)
-	if err != nil {
-		return err
-	}
-	r.Repo = *rp
-	// modification date may be changed
-	r.ModTime = fstat.ModTime()
-
-	if err := r.loadComponents(false); err != nil {
-		return err
-	}
-
-	// we could send an event data but we don't need for this topic
-	return r.Publish(RepositoryUpdated, nil)
-}
-
-// ForceRefresh forces a refresh of the repository without checking modification time.
-// This is useful when external tools (like lazygit) may have made changes that don't
-// update the directory modification time.
-func (r *Repository) ForceRefresh() error {
-	// if the Repository is only fast initialized, no need to refresh because
-	// it won't contain its belongings
-	if r.State.Branch == nil {
-		return nil
-	}
-
 	// re-initialize the go-git repository struct
 	rp, err := git.PlainOpen(r.AbsPath)
 	if err != nil {
@@ -191,19 +234,57 @@ func (r *Repository) ForceRefresh() error {
 	}
 	r.Repo = *rp
 
-	// update modification time
-	fstat, err := os.Stat(r.AbsPath)
-	if err != nil {
-		return err
+	if fstat, err := os.Stat(r.AbsPath); err == nil {
+		r.ModTime = fstat.ModTime()
 	}
-	r.ModTime = fstat.ModTime()
 
 	if err := r.loadComponents(false); err != nil {
 		return err
 	}
 
-	// we could send an event data but we don't need for this topic
-	return r.Publish(RepositoryUpdated, nil)
+	return nil
+}
+
+// RequestRefresh schedules a metadata refresh via the repository's event queue.
+func (r *Repository) RequestRefresh() error {
+	return r.Publish(RepositoryRefreshRequested, nil)
+}
+
+func (r *Repository) initEventQueues() {
+	if r.queues == nil {
+		r.queues = make(map[eventQueueType]*eventQueue)
+	}
+	r.queues[queueGit] = newEventQueue(r, queueGit)
+	r.queues[queueState] = newEventQueue(r, queueState)
+	if isTraceEnabled() {
+		r.queues[queueLog] = newEventQueue(r, queueLog)
+	}
+}
+
+func newEventQueue(repo *Repository, kind eventQueueType) *eventQueue {
+	q := &eventQueue{
+		repo: repo,
+		kind: kind,
+	}
+	switch kind {
+	case queueGit:
+		q.handler = q.handleGitEvent
+		q.events = make(chan *RepositoryEvent, 64)
+		go q.run()
+	case queueState:
+		// State queue needs async processing to avoid blocking during batch evaluation
+		// Use larger buffer to handle initial load of many repositories without blocking
+		q.handler = q.handleStateEvent
+		q.events = make(chan *RepositoryEvent, 512)
+		go q.run()
+	case queueLog:
+		q.handler = q.handleLogEvent
+		q.events = make(chan *RepositoryEvent, 128)
+		go q.run()
+	default:
+		// Unknown queue types fall back to synchronous dispatch
+	}
+	return q
 }
 
 // On adds new listener.
@@ -216,21 +297,139 @@ func (r *Repository) On(event string, listener RepositoryListener) {
 }
 
 // Publish publishes the data to a certain event by its name.
+// Events are either queued for async dispatch or handled synchronously.
 func (r *Repository) Publish(eventName string, data interface{}) error {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-	// let's find listeners for this event topic
-	listeners, ok := r.listeners[eventName]
-	if !ok {
+	if r == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+	if eventName == "" {
+		return fmt.Errorf("event name required")
+	}
+	event := &RepositoryEvent{Name: eventName, Data: data, Context: context.Background()}
+
+	queue := r.queueForEvent(eventName)
+	if queue == nil {
+		// Handle synchronously for events with lightweight listeners
+		listeners := r.listenersFor(eventName)
+		for _, listener := range listeners {
+			if err := listener(event); err != nil {
+				return err
+			}
+		}
+		r.traceEvent(eventName, queueState, data)
 		return nil
 	}
-	// now notify the listeners and channel the data
-	for i := range listeners {
-		event := &RepositoryEvent{
-			Name: eventName,
-			Data: data,
+
+	if err := queue.enqueue(event); err != nil {
+		return err
+	}
+	r.traceEvent(eventName, queue.kind, data)
+	return nil
+}
+
+func (r *Repository) listenersFor(eventName string) []RepositoryListener {
+	if r == nil || r.mutex == nil {
+		return nil
+	}
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+	listeners := r.listeners[eventName]
+	if len(listeners) == 0 {
+		return nil
+	}
+	cloned := make([]RepositoryListener, len(listeners))
+	copy(cloned, listeners)
+	return cloned
+}
+
+func (r *Repository) queueForEvent(eventName string) *eventQueue {
+	if r == nil {
+		return nil
+	}
+	switch eventName {
+	case RepositoryGitCommandRequested:
+		return r.queues[queueGit]
+	case RepositoryEvaluationRequested:
+		return r.queues[queueState]
+	case RepositoryEventTraced:
+		return r.queues[queueLog]
+	default:
+		// RepositoryRefreshRequested, RepositoryUpdated, BranchUpdated
+		// These events have lightweight listeners (non-blocking channel sends)
+		// so we handle them synchronously without a queue
+		return nil
+	}
+}
+
+func (q *eventQueue) enqueue(event *RepositoryEvent) error {
+	if q == nil {
+		return fmt.Errorf("event queue not initialized")
+	}
+	if q.events != nil {
+		if event.Context == nil {
+			event.Context = context.Background()
 		}
-		if err := listeners[i](event); err != nil {
+		q.events <- event
+		return nil
+	}
+	// For queues without channels, dispatch synchronously
+	if event.Context == nil {
+		event.Context = context.Background()
+	}
+	return q.dispatch(event)
+}
+
+func (q *eventQueue) run() {
+	for event := range q.events {
+		if q.handler != nil {
+			q.handler(event)
+		}
+	}
+}
+
+func (q *eventQueue) handleGitEvent(event *RepositoryEvent) {
+	sem := gitSemaphore()
+	if err := sem.Acquire(context.Background(), 1); err != nil {
+		log.Printf("git queue acquire failed: %v", err)
+		return
+	}
+	go func() {
+		defer sem.Release(1)
+		event.Context = context.Background()
+		if err := q.dispatch(event); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+			log.Printf("git queue event %s failed: %v", event.Name, err)
+		}
+	}()
+}
+
+func (q *eventQueue) handleLogEvent(event *RepositoryEvent) {
+	if event.Context == nil {
+		event.Context = context.Background()
+	}
+	if err := q.dispatch(event); err != nil && err != context.Canceled {
+		log.Printf("log queue event %s failed: %v", event.Name, err)
+	}
+}
+
+func (q *eventQueue) handleStateEvent(event *RepositoryEvent) {
+	if event.Context == nil {
+		event.Context = context.Background()
+	}
+	if err := q.dispatch(event); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+		log.Printf("state queue event %s failed: %v", event.Name, err)
+	}
+}
+
+func (q *eventQueue) dispatch(event *RepositoryEvent) error {
+	if event.Context == nil {
+		event.Context = context.Background()
+	}
+	listeners := q.repo.listenersFor(event.Name)
+	if len(listeners) == 0 {
+		return nil
+	}
+	for _, listener := range listeners {
+		if err := listener(event); err != nil {
 			return err
 		}
 	}
@@ -244,9 +443,45 @@ func (r *Repository) WorkStatus() WorkStatus {
 
 // SetWorkStatus sets the state of repository and sends repository updated event
 func (r *Repository) SetWorkStatus(ws WorkStatus) {
+	r.setWorkStatus(ws, true)
+}
+
+// SetWorkStatusSilent sets the state of repository without triggering a notification.
+// Use this for UI-only state changes (like tagging) that don't reflect actual repository changes.
+func (r *Repository) SetWorkStatusSilent(ws WorkStatus) {
+	r.setWorkStatus(ws, false)
+}
+
+// setWorkStatus is the internal implementation for setting work status
+func (r *Repository) setWorkStatus(ws WorkStatus, notify bool) {
+	if r.State == nil {
+		return
+	}
+	prev := r.State.workStatus
 	r.State.workStatus = ws
-	// we could send an event data but we don't need for this topic
+	if ws != Fail {
+		r.State.RecoverableError = false
+	}
+	if prev == ws {
+		return
+	}
+	if notify {
+		r.NotifyRepositoryUpdated()
+	}
+}
+
+// NotifyRepositoryUpdated emits a repository.updated event without mutating state.
+func (r *Repository) NotifyRepositoryUpdated() {
+	if r == nil {
+		return
+	}
 	_ = r.Publish(RepositoryUpdated, nil)
+}
+
+// MarkFailure is preserved for backward compatibility. Prefer using
+// MarkCriticalError or MarkRecoverableError for clarity.
+func (r *Repository) MarkFailure(message string, recoverable bool) {
+	r.markErrorState(message, recoverable)
 }
 
 func (r *Repository) String() string {

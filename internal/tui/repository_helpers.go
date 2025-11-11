@@ -3,6 +3,7 @@ package tui
 import (
 	"slices"
 
+	"github.com/thorstenhirsch/gitbatch/internal/command"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -16,16 +17,25 @@ func filterRepositories(repos []*git.Repository) []*git.Repository {
 	})
 }
 
-// refreshBranchState reloads repository metadata and ensures branch commits are initialized.
-func refreshBranchState(repo *git.Repository) error {
+// scheduleRefresh enqueues a repository refresh and propagates any scheduling errors.
+func scheduleRefresh(repo *git.Repository) error {
 	if repo == nil {
 		return nil
 	}
-	if err := repo.ForceRefresh(); err != nil {
-		return err
+	message := ""
+	if repo.State != nil {
+		message = repo.State.Message
 	}
-	if state := repo.State; state != nil && state.Branch != nil {
-		_ = state.Branch.InitializeCommits(repo)
+	if err := command.ScheduleRepositoryRefresh(repo, &command.OperationOutcome{
+		Operation: command.OperationRefresh,
+		Message:   message,
+	}); err != nil {
+		command.ScheduleStateEvaluation(repo, command.OperationOutcome{
+			Operation: command.OperationRefresh,
+			Err:       err,
+			Message:   err.Error(),
+		})
+		return err
 	}
 	return nil
 }

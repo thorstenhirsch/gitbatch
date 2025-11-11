@@ -29,7 +29,7 @@ func loadRepositoriesCmd(directories []string) tea.Cmd {
 
 // tickCmd returns a command that sends a tick message after a delay
 func tickCmd() tea.Cmd {
-	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Millisecond*250, func(t time.Time) tea.Msg {
 		return jobCompletedMsg{}
 	})
 }

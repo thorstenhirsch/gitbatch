@@ -1,21 +1,16 @@
 package job
 
 import (
-	"context"
 	"fmt"
-	"runtime"
 	"sync"
 
 	"github.com/thorstenhirsch/gitbatch/internal/git"
-	"golang.org/x/sync/semaphore"
 )
 
 // Queue holds the slice of Jobs
 type Queue struct {
 	series []*Job
 }
-
-const maxConcurrentJobs = 5
 
 // CreateJobQueue creates a jobqueue struct and initialize its slice then return
 // its pointer
@@ -49,7 +44,7 @@ func (jq *Queue) StartNext() (j *Job, finished bool, err error) {
 	i := len(jq.series) - 1
 	lastJob := jq.series[i]
 	jq.series = jq.series[:i]
-	if err = lastJob.start(); err != nil {
+	if err = lastJob.Start(); err != nil {
 		return lastJob, finished, err
 	}
 	return lastJob, finished, nil
@@ -85,47 +80,24 @@ func (jq *Queue) IsInTheQueue(r *git.Repository) (inTheQueue bool, j *Job) {
 	return inTheQueue, j
 }
 
-// StartJobsAsync start the jobs in the queue asynchronously
+// StartJobsAsync starts all jobs in the queue asynchronously.
+// Concurrency is limited by the git queue semaphore in internal/git/repository.go,
+// which caps concurrent git operations globally across all repositories.
 func (jq *Queue) StartJobsAsync() map[*Job]error {
 	if len(jq.series) == 0 {
 		return make(map[*Job]error)
 	}
 
-	// Use a context with better lifecycle management
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var (
-		maxWorkers = runtime.GOMAXPROCS(0)
-	)
-	if maxWorkers > maxConcurrentJobs {
-		maxWorkers = maxConcurrentJobs
-	}
-	if maxWorkers < 1 {
-		maxWorkers = 1
-	}
-
-	var (
-		sem   = semaphore.NewWeighted(int64(maxWorkers))
-		fails = make(map[*Job]error)
-	)
-
-	var wg sync.WaitGroup
+	fails := make(map[*Job]error)
 	var mx sync.Mutex
+	var wg sync.WaitGroup
 
-	// Process jobs with proper synchronization
+	// Start all jobs; git queue will handle concurrency limiting
 	jobCount := len(jq.series)
 	for i := 0; i < jobCount; i++ {
-		if err := sem.Acquire(ctx, 1); err != nil {
-			break
-		}
-
 		wg.Add(1)
 		go func() {
-			defer func() {
-				sem.Release(1)
-				wg.Done()
-			}()
+			defer wg.Done()
 
 			j, finished, err := jq.StartNext()
 			if finished {
@@ -139,7 +111,6 @@ func (jq *Queue) StartJobsAsync() map[*Job]error {
 		}()
 	}
 
-	// Wait for all jobs to complete
 	wg.Wait()
 	return fails
 }
