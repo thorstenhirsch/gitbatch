@@ -417,6 +417,15 @@ func applyCleanliness(r *git.Repository) {
 		return
 	}
 
+	// Run cleanliness evaluation asynchronously to avoid blocking the event queue
+	go applyCleanlinessAsync(r)
+}
+
+func applyCleanlinessAsync(r *git.Repository) {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return
+	}
+
 	branch := r.State.Branch
 
 	// Check if the working tree is clean according to git

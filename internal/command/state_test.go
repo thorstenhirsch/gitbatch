@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
@@ -32,6 +33,7 @@ func TestApplyCleanliness_CleanWorkingTree_NoIncomingCommits(t *testing.T) {
 
 	// Apply cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Verify: should be clean
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean")
@@ -99,6 +101,7 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 	// Refresh repo state
 	require.NoError(t, repo.Refresh())
 	require.NoError(t, ScheduleRepositoryRefresh(repo, nil))
+	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
 
 	// Verify setup: clean working tree with incoming commits
 	require.True(t, repo.IsClean(), "working tree should be clean")
@@ -106,6 +109,7 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 
 	// Apply cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Verify: should be clean (no local changes means no conflicts)
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean despite incoming commits")
@@ -134,6 +138,7 @@ func TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits(t *testing.T) {
 
 	// Apply cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Verify: should be clean (no incoming commits means up-to-date)
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean")
@@ -204,6 +209,7 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 	// Refresh repo state
 	require.NoError(t, repo.Refresh())
 	require.NoError(t, ScheduleRepositoryRefresh(repo, nil))
+	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
 
 	// Verify setup: unclean working tree with incoming commits
 	require.False(t, repo.IsClean(), "working tree should not be clean")
@@ -211,6 +217,7 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 
 	// Apply cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Verify: should be clean (fast-forward would succeed)
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean - fast-forward would succeed")
@@ -288,6 +295,7 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *
 	// Refresh repo state
 	require.NoError(t, repo.Refresh())
 	require.NoError(t, ScheduleRepositoryRefresh(repo, nil))
+	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
 
 	// Verify setup: unclean working tree with incoming commits
 	require.False(t, repo.IsClean(), "working tree should not be clean")
@@ -295,6 +303,7 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *
 
 	// Apply cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Verify: should be dirty (merge conflict would occur)
 	require.False(t, repo.State.Branch.Clean, "repository should be marked as dirty - merge conflict")
@@ -483,6 +492,7 @@ func TestApplyCleanliness_UpstreamNotConfigured(t *testing.T) {
 
 	// Apply cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Should be clean (no upstream means no incoming commits to worry about)
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean when no upstream")
@@ -585,6 +595,7 @@ func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 
 	// Apply cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Verify: should be clean (fast-forward would succeed, no conflicts)
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as CLEAN - fast-forward would succeed with non-conflicting changes")

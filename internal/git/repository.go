@@ -277,8 +277,9 @@ func newEventQueue(repo *Repository, kind eventQueueType) *eventQueue {
 		go q.run()
 	case queueState:
 		// State queue needs async processing to avoid blocking during batch evaluation
+		// Use larger buffer to handle initial load of many repositories without blocking
 		q.handler = q.handleStateEvent
-		q.events = make(chan *RepositoryEvent, 64)
+		q.events = make(chan *RepositoryEvent, 512)
 		go q.run()
 	case queueLog:
 		q.handler = q.handleLogEvent

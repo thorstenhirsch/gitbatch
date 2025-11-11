@@ -80,6 +80,7 @@ func TestFetchJobPreservesRecoverableState(t *testing.T) {
 	}()
 
 	require.NoError(t, command.ScheduleRepositoryRefresh(repo, nil))
+	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
 	require.NotNil(t, repo.State.Branch.Upstream)
 	require.Nil(t, repo.State.Branch.Upstream.Reference)
 

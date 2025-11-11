@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
@@ -120,6 +121,7 @@ func TestDirtyState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails(t *testi
 
 	// Apply the full cleanliness check
 	applyCleanliness(repo)
+	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
 	// Document actual behavior: When local uncommitted changes conflict with incoming commits,
 	// git says "would be overwritten", which is treated as "ff would succeed",

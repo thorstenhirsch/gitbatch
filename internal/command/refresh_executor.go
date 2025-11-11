@@ -25,31 +25,36 @@ func AttachRefreshExecutor(r *git.Repository) {
 			outcome = nil
 		}
 
-		err := r.Refresh()
-		if err != nil {
-			ScheduleStateEvaluation(r, OperationOutcome{
-				Operation: OperationRefresh,
-				Err:       err,
-			})
-			return err
-		}
-
-		if outcome == nil {
-			message := ""
-			if r.State != nil {
-				message = r.State.Message
+		// Run refresh asynchronously to avoid blocking the state queue
+		// This is critical during initial load when many repos refresh simultaneously
+		go func() {
+			err := r.Refresh()
+			if err != nil {
+				ScheduleStateEvaluation(r, OperationOutcome{
+					Operation: OperationRefresh,
+					Err:       err,
+				})
+				return
 			}
-			ScheduleStateEvaluation(r, OperationOutcome{
-				Operation: OperationRefresh,
-				Message:   message,
-			})
-			return nil
-		}
 
-		if outcome.Operation == "" {
-			outcome.Operation = OperationRefresh
-		}
-		ScheduleStateEvaluation(r, *outcome)
+			if outcome == nil {
+				message := ""
+				if r.State != nil {
+					message = r.State.Message
+				}
+				ScheduleStateEvaluation(r, OperationOutcome{
+					Operation: OperationRefresh,
+					Message:   message,
+				})
+				return
+			}
+
+			outcomeToSend := *outcome
+			if outcomeToSend.Operation == "" {
+				outcomeToSend.Operation = OperationRefresh
+			}
+			ScheduleStateEvaluation(r, outcomeToSend)
+		}()
 		return nil
 	})
 }

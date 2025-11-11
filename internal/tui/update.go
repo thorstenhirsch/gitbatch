@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thorstenhirsch/gitbatch/internal/command"
@@ -14,10 +16,34 @@ import (
 
 var repositoryUpdateCh = make(chan struct{}, 256)
 
+// lastRepositoryUpdateCheck tracks when we last checked for repository updates
+// to throttle UI refresh rate during heavy update periods
+// lastJobsFlagUpdate tracks when we last updated the jobsRunning flag
+var (
+	lastRepositoryUpdateCheck time.Time
+	lastJobsFlagUpdate        time.Time
+	updateCheckMutex          sync.Mutex
+)
+
 func listenRepositoryUpdatesCmd() tea.Cmd {
 	return func() tea.Msg {
+		// Throttle to max 30 FPS (33ms) to prevent starving keyboard input
+		// during heavy repository state updates
+		updateCheckMutex.Lock()
+		now := time.Now()
+		if now.Sub(lastRepositoryUpdateCheck) < 33*time.Millisecond {
+			updateCheckMutex.Unlock()
+			return nil
+		}
+		lastRepositoryUpdateCheck = now
+		updateCheckMutex.Unlock()
+
 		select {
 		case <-repositoryUpdateCh:
+			// Drain any additional updates to batch them
+			for len(repositoryUpdateCh) > 0 {
+				<-repositoryUpdateCh
+			}
 			return repositoryStateChangedMsg{}
 		default:
 			return nil
@@ -92,11 +118,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, withListener()
 
 	case repositoryStateChangedMsg:
-		m.updateJobsRunningFlag()
-		// Only schedule the next tick if jobs are still running
-		if m.jobsRunning {
+		// Throttle the expensive updateJobsRunningFlag() check
+		// Only update every 100ms to avoid O(n) iteration on every state change
+		updateCheckMutex.Lock()
+		now := time.Now()
+		shouldUpdate := now.Sub(lastJobsFlagUpdate) >= 100*time.Millisecond
+		if shouldUpdate {
+			lastJobsFlagUpdate = now
+		}
+		updateCheckMutex.Unlock()
+
+		if shouldUpdate {
+			m.updateJobsRunningFlag()
+		}
+
+		// Only schedule tick if jobs are actually running
+		// Avoid scheduling tick on every state change to reduce event loop pressure
+		if m.jobsRunning && shouldUpdate {
 			return m, withListener(tickCmd())
 		}
+		// Just listen for updates without scheduling another tick
 		return m, withListener()
 
 	case repositoriesWaitingMsg:
@@ -125,7 +166,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.jobsRunning {
 			m.advanceSpinner()
 		}
-		m.updateJobsRunningFlag()
+
+		// Throttle updateJobsRunningFlag check here too
+		updateCheckMutex.Lock()
+		now := time.Now()
+		shouldUpdate := now.Sub(lastJobsFlagUpdate) >= 100*time.Millisecond
+		if shouldUpdate {
+			lastJobsFlagUpdate = now
+		}
+		updateCheckMutex.Unlock()
+
+		if shouldUpdate {
+			m.updateJobsRunningFlag()
+		}
+
 		// Only schedule the next tick if jobs are still running
 		if m.jobsRunning {
 			return m, withListener(tickCmd())
