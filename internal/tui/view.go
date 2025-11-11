@@ -1403,6 +1403,7 @@ func (m *Model) renderStatusBar() string {
 	dirty := repoIsDirty(focusRepo)
 	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
 	recoverable := failed && focusRepo.State != nil && focusRepo.State.RecoverableError
+	requiresCredentials := failed && focusRepo.State != nil && focusRepo.State.RequiresCredentials
 
 	center := ""
 
@@ -1451,7 +1452,17 @@ func (m *Model) renderStatusBar() string {
 			if focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != "" {
 				message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
 			}
-			if recoverable {
+			if requiresCredentials {
+				statusBarStyle = m.styles.StatusBarRecoverable
+				left = " credentials required"
+				right = "enter: provide | c: clear | TAB: lazygit"
+				rightWidth = lipgloss.Width(right)
+				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+				if maxCenter < 0 {
+					maxCenter = 0
+				}
+				center = truncateString(message, maxCenter)
+			} else if recoverable {
 				statusBarStyle = m.styles.StatusBarRecoverable
 				left = " repo needs attention"
 				right = "c: clear | TAB: lazygit"
@@ -1534,7 +1545,7 @@ Navigation:  ↑/k up   g/Home top        ↓/j down G/End bottom
              PgUp/Ctrl+B page up        PgDn/Ctrl+F page down
              Ctrl+U half page up        Ctrl+D half page down
 
-Actions:     Space   toggle queue       Enter   start queue
+Actions:     Space   toggle queue       Enter   start queue / provide credentials
 			 a       tag all            A       untag all
              m       cycle mode         Tab     open lazygit
 
