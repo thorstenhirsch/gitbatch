@@ -572,8 +572,8 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	case git.Fail:
 		statusIcon = failSymbol
 		if requiresCredentials {
-			// Requires credentials gets the same visual treatment as recoverable
-			style = m.styles.RecoverableFailedItem
+			// Requires credentials gets pink styling
+			style = m.styles.CredentialsItem
 		} else if recoverable {
 			style = m.styles.RecoverableFailedItem
 		} else {
@@ -637,6 +637,8 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	if selected {
 		var highlight lipgloss.Style
 		switch {
+		case requiresCredentials:
+			highlight = m.styles.CredentialsSelectedItem
 		case recoverable:
 			highlight = m.styles.RecoverableFailedSelectedItem
 		case failed:
@@ -1453,7 +1455,7 @@ func (m *Model) renderStatusBar() string {
 				message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
 			}
 			if requiresCredentials {
-				statusBarStyle = m.styles.StatusBarRecoverable
+				statusBarStyle = m.styles.StatusBarCredentials
 				left = " credentials required"
 				right = "enter: provide | c: clear | TAB: lazygit"
 				rightWidth = lipgloss.Width(right)
@@ -1545,7 +1547,7 @@ Navigation:  ↑/k up   g/Home top        ↓/j down G/End bottom
              PgUp/Ctrl+B page up        PgDn/Ctrl+F page down
              Ctrl+U half page up        Ctrl+D half page down
 
-Actions:     Space   toggle queue       Enter   start queue / provide credentials
+Actions:     Space   toggle queue       Enter   start queue
 			 a       tag all            A       untag all
              m       cycle mode         Tab     open lazygit
 
