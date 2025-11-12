@@ -84,6 +84,16 @@ func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
 	}
 
 	if outcome.Err != nil {
+		// Check for authentication errors first
+		if gerr.RequiresCredentials(outcome.Err) {
+			message := strings.TrimSpace(outcome.Message)
+			if message == "" {
+				message = git.NormalizeGitErrorMessage(outcome.Err.Error())
+			}
+			r.MarkRequiresCredentials(message)
+			return
+		}
+
 		recoverable := false
 		if outcome.RecoverableOverride != nil {
 			recoverable = *outcome.RecoverableOverride
