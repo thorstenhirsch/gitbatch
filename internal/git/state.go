@@ -45,6 +45,27 @@ func (r *Repository) MarkRecoverableError(message string) {
 	r.markErrorState(message, true)
 }
 
+// MarkRequiresCredentials transitions the repository into a state requiring credentials.
+func (r *Repository) MarkRequiresCredentials(message string) {
+	if r == nil {
+		return
+	}
+
+	r.MarkDirty()
+	r.SetWorkStatus(Fail)
+	if r.State == nil {
+		return
+	}
+	r.State.RequiresCredentials = true
+	r.State.RecoverableError = false
+	trimmed := strings.TrimSpace(message)
+	if trimmed != "" {
+		r.State.Message = trimmed
+	} else {
+		r.State.Message = "authentication required"
+	}
+}
+
 func (r *Repository) markErrorState(message string, recoverable bool) {
 	if r == nil {
 		return
@@ -56,6 +77,7 @@ func (r *Repository) markErrorState(message string, recoverable bool) {
 		return
 	}
 	r.State.RecoverableError = recoverable
+	r.State.RequiresCredentials = false
 	trimmed := strings.TrimSpace(message)
 	if trimmed != "" {
 		r.State.Message = trimmed
@@ -73,7 +95,9 @@ func (r *Repository) ApplyOperationError(err error) error {
 	}
 
 	message := NormalizeGitErrorMessage(err.Error())
-	if gerr.IsRecoverable(err) {
+	if gerr.RequiresCredentials(err) {
+		r.MarkRequiresCredentials(message)
+	} else if gerr.IsRecoverable(err) {
 		r.MarkRecoverableError(message)
 	} else {
 		r.MarkCriticalError(message)

@@ -550,6 +550,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	dirty := repoIsDirty(r)
 	failed := status == git.Fail
 	recoverable := failed && r.State != nil && r.State.RecoverableError
+	requiresCredentials := failed && r.State != nil && r.State.RequiresCredentials
 
 	switch status {
 	case git.Pending:
@@ -570,7 +571,10 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		style = m.styles.SuccessItem
 	case git.Fail:
 		statusIcon = failSymbol
-		if recoverable {
+		if requiresCredentials {
+			// Requires credentials gets pink styling
+			style = m.styles.CredentialsItem
+		} else if recoverable {
 			style = m.styles.RecoverableFailedItem
 		} else {
 			style = m.styles.FailedItem
@@ -633,6 +637,8 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	if selected {
 		var highlight lipgloss.Style
 		switch {
+		case requiresCredentials:
+			highlight = m.styles.CredentialsSelectedItem
 		case recoverable:
 			highlight = m.styles.RecoverableFailedSelectedItem
 		case failed:
@@ -1399,6 +1405,7 @@ func (m *Model) renderStatusBar() string {
 	dirty := repoIsDirty(focusRepo)
 	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
 	recoverable := failed && focusRepo.State != nil && focusRepo.State.RecoverableError
+	requiresCredentials := failed && focusRepo.State != nil && focusRepo.State.RequiresCredentials
 
 	center := ""
 
@@ -1447,7 +1454,17 @@ func (m *Model) renderStatusBar() string {
 			if focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != "" {
 				message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
 			}
-			if recoverable {
+			if requiresCredentials {
+				statusBarStyle = m.styles.StatusBarCredentials
+				left = " credentials required"
+				right = "enter: provide | c: clear | TAB: lazygit"
+				rightWidth = lipgloss.Width(right)
+				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+				if maxCenter < 0 {
+					maxCenter = 0
+				}
+				center = truncateString(message, maxCenter)
+			} else if recoverable {
 				statusBarStyle = m.styles.StatusBarRecoverable
 				left = " repo needs attention"
 				right = "c: clear | TAB: lazygit"

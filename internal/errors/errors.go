@@ -68,6 +68,19 @@ func ParseGitError(out string, err error) error {
 		trimmed = strings.TrimSpace(err.Error())
 	}
 
+	// Check for authentication errors first
+	lowerOut := strings.ToLower(out)
+	lowerTrimmed := strings.ToLower(trimmed)
+	if strings.Contains(lowerOut, "authentication required") ||
+		strings.Contains(lowerOut, "authentication failed") ||
+		strings.Contains(lowerOut, "could not read username") ||
+		strings.Contains(lowerOut, "could not read password") ||
+		strings.Contains(lowerOut, "invalid username or password") ||
+		strings.Contains(lowerOut, "http basic: access denied") ||
+		strings.Contains(lowerTrimmed, "fatal: authentication") {
+		return ErrAuthenticationRequired
+	}
+
 	if strings.Contains(out, "error: Your local changes to the following files would be overwritten by merge") {
 		return ErrMergeAbortedTryCommit
 	} else if strings.Contains(out, "ERROR: Repository not found") {
@@ -113,4 +126,37 @@ func IsRecoverable(err error) bool {
 		return false
 	}
 	return strings.Contains(lowered, "upstream is gone")
+}
+
+// RequiresCredentials reports whether the provided error indicates that
+// authentication credentials are required to complete the operation.
+func RequiresCredentials(err error) bool {
+	if err == nil {
+		return false
+	}
+	if stdErrors.Is(err, ErrAuthenticationRequired) {
+		return true
+	}
+	if stdErrors.Is(err, ErrPermissionDenied) {
+		return true
+	}
+	if stdErrors.Is(err, ErrAuthorizationFailed) {
+		return true
+	}
+	lowered := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lowered == "" {
+		return false
+	}
+	// Check for various authentication error patterns
+	return strings.Contains(lowered, "authentication required") ||
+		strings.Contains(lowered, "authentication failed") ||
+		strings.Contains(lowered, "permission denied") ||
+		strings.Contains(lowered, "authorization failed") ||
+		strings.Contains(lowered, "could not read username") ||
+		strings.Contains(lowered, "could not read password") ||
+		strings.Contains(lowered, "invalid username or password") ||
+		strings.Contains(lowered, "http basic: access denied") ||
+		strings.Contains(lowered, "fatal: authentication") ||
+		strings.Contains(lowered, "401") ||
+		strings.Contains(lowered, "403 forbidden")
 }
