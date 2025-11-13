@@ -37,8 +37,23 @@ func TestRequiresCredentials(t *testing.T) {
 			expected: true,
 		},
 		{
-			name:     "HTTP Basic access denied",
-			err:      fmt.Errorf("HTTP Basic: Access Denied"),
+			name:     "remote HTTP Basic access denied",
+			err:      fmt.Errorf("remote: HTTP Basic: Access denied"),
+			expected: true,
+		},
+		{
+			name:     "remote invalid username or password",
+			err:      fmt.Errorf("remote: Invalid username or password"),
+			expected: true,
+		},
+		{
+			name:     "fatal authentication failed for",
+			err:      fmt.Errorf("fatal: Authentication failed for 'https://github.com/user/repo.git/'"),
+			expected: true,
+		},
+		{
+			name:     "permission denied password",
+			err:      fmt.Errorf("Permission denied (password)"),
 			expected: true,
 		},
 		{
@@ -70,6 +85,16 @@ func TestRequiresCredentials(t *testing.T) {
 			name:     "invalid username or password",
 			err:      fmt.Errorf("invalid username or password"),
 			expected: true,
+		},
+		{
+			name:     "exit status 128",
+			err:      exitCodeError{code: 128},
+			expected: true,
+		},
+		{
+			name:     "exit status 1",
+			err:      exitCodeError{code: 1},
+			expected: false,
 		},
 		{
 			name:     "non-auth error",
@@ -115,9 +140,24 @@ func TestParseGitErrorDetectsAuthentication(t *testing.T) {
 			expected: ErrAuthenticationRequired,
 		},
 		{
-			name:     "HTTP basic access denied",
-			output:   "fatal: HTTP Basic: Access denied",
+			name:     "remote HTTP Basic access denied",
+			output:   "remote: HTTP Basic: Access denied",
 			expected: ErrAuthenticationRequired,
+		},
+		{
+			name:     "remote invalid username or password",
+			output:   "remote: Invalid username or password",
+			expected: ErrAuthenticationRequired,
+		},
+		{
+			name:     "fatal authentication failed for",
+			output:   "fatal: Authentication failed for 'https://github.com/user/repo.git/'",
+			expected: ErrAuthenticationRequired,
+		},
+		{
+			name:     "permission denied password",
+			output:   "Permission denied (password)",
+			expected: ErrPermissionDenied,
 		},
 		{
 			name:     "could not read username",
@@ -139,4 +179,16 @@ func TestParseGitErrorDetectsAuthentication(t *testing.T) {
 			}
 		})
 	}
+}
+
+type exitCodeError struct {
+	code int
+}
+
+func (e exitCodeError) Error() string {
+	return fmt.Sprintf("exit %d", e.code)
+}
+
+func (e exitCodeError) ExitCode() int {
+	return e.code
 }

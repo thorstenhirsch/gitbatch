@@ -41,7 +41,9 @@ type OperationOutcome struct {
 
 // isGitFatalError checks if an error is a git fatal error (exit code 128).
 // These errors indicate serious problems like network failures, permission issues,
-// or repository corruption and should be treated as critical, not recoverable.
+// or repository corruption. Note: This function is used to determine if fetch
+// errors should be treated as critical vs recoverable, but specific error types
+// are now classified more precisely in the errors package.
 func isGitFatalError(err error) bool {
 	if err == nil {
 		return false
@@ -59,7 +61,7 @@ func isGitFatalError(err error) bool {
 
 // EvaluateRepositoryState centralises repository state transitions after an operation.
 // It is invoked after auto-fetch, queued jobs, and lazygit refreshes to ensure
-// consistent clean/dirty and error handling across the application.
+// consistent clean/disabled and error handling across the application.
 func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
 	if r == nil || r.State == nil {
 		return
@@ -447,19 +449,7 @@ func applyCleanlinessAsync(r *git.Repository) {
 			return
 		}
 
-		// If the working tree is clean (no local changes), mark the repo as clean.
-		// With no local changes, there can be no merge conflicts with incoming commits.
-		if workingTreeClean {
-			r.MarkClean()
-			if r.WorkStatus() != git.Available {
-				r.SetWorkStatus(git.Available)
-			}
-			return
-		}
-
-		// Working tree is NOT clean (has local changes) AND there are incoming commits.
-		// We need to check if the local changes would conflict with incoming commits.
-		// Use fast-forward dry-run to determine this.
+		// Always check if fast-forward merge would succeed when there are incoming commits
 		mergeArg := upstreamMergeArgument(upstream)
 		if mergeArg == "" {
 			r.MarkRecoverableError("upstream not configured")
@@ -478,14 +468,27 @@ func applyCleanlinessAsync(r *git.Repository) {
 			return
 		}
 
-		// Even though git reports "working tree NOT clean", if fast-forward
-		// succeeds, the local changes don't conflict with incoming commits.
-		if succeeds {
+		if workingTreeClean {
+			// Working tree is clean - fast-forward will succeed
 			r.MarkClean()
+			if succeeds {
+				// Automatically queue the repo for the current operation since fast-forward will work
+				// This simulates what happens when user presses space on a repo
+				r.SetWorkStatus(git.Queued)
+			}
 		} else {
-			r.MarkDirty()
+			// Working tree is NOT clean - check if local changes conflict with incoming commits
+			if succeeds {
+				// Even though git reports "working tree NOT clean", if fast-forward
+				// succeeds, the local changes don't conflict with incoming commits.
+				r.MarkClean()
+				// Automatically queue the repo for the current operation since fast-forward will work
+				r.SetWorkStatus(git.Queued)
+			} else {
+				r.MarkDisabled()
+			}
 		}
-		if r.WorkStatus() != git.Available {
+		if r.WorkStatus() != git.Available && r.WorkStatus() != git.Queued {
 			r.SetWorkStatus(git.Available)
 		}
 		return

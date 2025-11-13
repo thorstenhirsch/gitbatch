@@ -50,22 +50,131 @@ const (
 	// ErrUserEmailNotSet is thrown if there is no configured user email while
 	// commit command
 	ErrUserEmailNotSet GitError = ("user email not configured")
+	// ErrNetworkTimeout is thrown when network operations timeout
+	ErrNetworkTimeout GitError = ("network timeout")
+	// ErrNetworkUnreachable is thrown when network is unreachable
+	ErrNetworkUnreachable GitError = ("network unreachable")
+	// ErrDNSError is thrown when DNS resolution fails
+	ErrDNSError GitError = ("dns resolution failed")
+	// ErrSSLError is thrown when SSL/TLS validation fails
+	ErrSSLError GitError = ("ssl certificate problem")
 	// ErrUnclassified is unconsidered error type
 	ErrUnclassified GitError = ("unclassified error")
 	// NoErrIterationHalted is thrown for catching stops in interators
 	NoErrIterationHalted GitError = ("iteration halted")
 )
 
+// gitErrorWithExitCode wraps a GitError with exit code information
+type gitErrorWithExitCode struct {
+	GitError
+	exitCode int
+}
+
+func (e gitErrorWithExitCode) ExitCode() int {
+	return e.exitCode
+}
+
+func (e gitErrorWithExitCode) Error() string {
+	return e.GitError.Error()
+}
+
 func (e GitError) Error() string {
 	return string(e)
 }
 
+<<<<<<< HEAD
+=======
+type exitCoder interface {
+	ExitCode() int
+}
+
+func exitCodeFromError(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+
+	if coder, ok := err.(exitCoder); ok {
+		return coder.ExitCode(), true
+	}
+	return 0, false
+}
+
+// RequiresCredentials checks if the error indicates that authentication credentials are required
+func RequiresCredentials(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Only treat exit code 128 as requiring credentials if we can't classify it better
+	// This is a fallback for unclassified exit 128 errors that might be auth-related
+	if code, ok := exitCodeFromError(err); ok && code == 128 {
+		// Check if this is already classified as a different error type
+		if gerr, ok := err.(gitErrorWithExitCode); ok {
+			// If it's already classified as something else, don't treat as credentials
+			switch gerr.GitError {
+			case ErrRemoteNotFound, ErrNetworkTimeout, ErrNetworkUnreachable, ErrDNSError, ErrSSLError:
+				return false
+			}
+		}
+		// For unclassified exit 128, assume it might be credentials (fallback)
+		return true
+	}
+
+	// Check for specific error types
+	switch err {
+	case ErrAuthenticationRequired, ErrPermissionDenied, ErrAuthorizationFailed:
+		return true
+	}
+
+	// Check error message content
+	errMsg := strings.ToLower(err.Error())
+	return strings.Contains(errMsg, "authentication required") ||
+		strings.Contains(errMsg, "authentication failed") ||
+		strings.Contains(errMsg, "could not read username") ||
+		strings.Contains(errMsg, "could not read password") ||
+		strings.Contains(errMsg, "invalid username or password") ||
+		strings.Contains(errMsg, "http basic: access denied") ||
+		strings.Contains(errMsg, "remote: http basic: access denied") ||
+		strings.Contains(errMsg, "remote: invalid username or password") ||
+		strings.Contains(errMsg, "fatal: authentication failed for") ||
+		strings.Contains(errMsg, "permission denied (publickey)") ||
+		strings.Contains(errMsg, "permission denied (password)") ||
+		strings.Contains(errMsg, "fatal: authentication") ||
+		strings.Contains(errMsg, "permission denied") ||
+		strings.Contains(errMsg, "401 unauthorized") ||
+		strings.Contains(errMsg, "403 forbidden")
+}
+
+// IsRecoverable checks if the error is recoverable (can be fixed by user action)
+func IsRecoverable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for specific error types that are recoverable
+	switch err {
+	case ErrAlreadyUpToDate, ErrRemoteBranchNotSpecified, ErrMergeAbortedTryCommit,
+		ErrConflictAfterMerge, ErrUnmergedFiles, ErrOverwrittenByMerge,
+		ErrRemoteNotFound, ErrNetworkTimeout, ErrNetworkUnreachable, ErrDNSError, ErrSSLError:
+		return true
+	}
+
+	return false
+}
+
+>>>>>>> c75a2ae (rename dirty to disabled state, fix state re-evaluation)
 // ParseGitError takes git output as an input and tries to find some meaningful
 // errors can be used by the app
 func ParseGitError(out string, err error) error {
 	trimmed := strings.TrimSpace(out)
 	if trimmed == "" && err != nil {
 		trimmed = strings.TrimSpace(err.Error())
+	}
+
+	// Get exit code if available
+	var exitCode int
+	if coder, ok := err.(exitCoder); ok {
+		exitCode = coder.ExitCode()
 	}
 
 	// Check for authentication errors first
@@ -77,13 +186,22 @@ func ParseGitError(out string, err error) error {
 		strings.Contains(lowerOut, "could not read password") ||
 		strings.Contains(lowerOut, "invalid username or password") ||
 		strings.Contains(lowerOut, "http basic: access denied") ||
+		strings.Contains(lowerOut, "remote: http basic: access denied") ||
+		strings.Contains(lowerOut, "remote: invalid username or password") ||
+		strings.Contains(lowerOut, "fatal: authentication failed for") ||
 		strings.Contains(lowerTrimmed, "fatal: authentication") {
+		if exitCode > 0 {
+			return gitErrorWithExitCode{GitError: ErrAuthenticationRequired, exitCode: exitCode}
+		}
 		return ErrAuthenticationRequired
 	}
 
 	if strings.Contains(out, "error: Your local changes to the following files would be overwritten by merge") {
 		return ErrMergeAbortedTryCommit
 	} else if strings.Contains(out, "ERROR: Repository not found") {
+		if exitCode > 0 {
+			return gitErrorWithExitCode{GitError: ErrRemoteNotFound, exitCode: exitCode}
+		}
 		return ErrRemoteNotFound
 	} else if strings.Contains(out, "for your current branch, you must specify a branch on the command line") {
 		return ErrRemoteBranchNotSpecified
@@ -95,10 +213,40 @@ func ParseGitError(out string, err error) error {
 		return ErrReferenceBroken
 	} else if strings.Contains(out, "git config --global add user.email") {
 		return ErrUserEmailNotSet
-	} else if strings.Contains(out, "Permission denied (publickey)") {
+	} else if strings.Contains(out, "Permission denied (publickey)") ||
+		strings.Contains(out, "Permission denied (password)") {
+		if exitCode > 0 {
+			return gitErrorWithExitCode{GitError: ErrPermissionDenied, exitCode: exitCode}
+		}
 		return ErrPermissionDenied
 	} else if strings.Contains(out, "would be overwritten by merge") {
 		return ErrOverwrittenByMerge
+	} else if strings.Contains(lowerOut, "operation timed out") ||
+		strings.Contains(lowerOut, "timeout") {
+		if exitCode > 0 {
+			return gitErrorWithExitCode{GitError: ErrNetworkTimeout, exitCode: exitCode}
+		}
+		return ErrNetworkTimeout
+	} else if strings.Contains(lowerOut, "could not resolve hostname") ||
+		strings.Contains(lowerOut, "name or service not known") ||
+		strings.Contains(lowerOut, "nodename nor servname provided") {
+		if exitCode > 0 {
+			return gitErrorWithExitCode{GitError: ErrDNSError, exitCode: exitCode}
+		}
+		return ErrDNSError
+	} else if strings.Contains(lowerOut, "failed to connect") ||
+		strings.Contains(lowerOut, "network is unreachable") ||
+		strings.Contains(lowerOut, "no route to host") {
+		if exitCode > 0 {
+			return gitErrorWithExitCode{GitError: ErrNetworkUnreachable, exitCode: exitCode}
+		}
+		return ErrNetworkUnreachable
+	} else if strings.Contains(lowerOut, "ssl certificate problem") ||
+		strings.Contains(lowerOut, "tls handshake failed") {
+		if exitCode > 0 {
+			return gitErrorWithExitCode{GitError: ErrSSLError, exitCode: exitCode}
+		}
+		return ErrSSLError
 	}
 
 	if trimmed == "" {

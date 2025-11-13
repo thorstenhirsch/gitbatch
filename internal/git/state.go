@@ -6,9 +6,9 @@ import (
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 )
 
-// MarkDirty marks the current branch as having unmerged or unpushed work.
-// This reflects the repository entering a dirty state until reconciled or refreshed.
-func (r *Repository) MarkDirty() {
+// MarkDisabled marks the current branch as having unmerged or unpushed work.
+// This reflects the repository entering a disabled state until reconciled or refreshed.
+func (r *Repository) MarkDisabled() {
 	if r == nil || r.State == nil || r.State.Branch == nil {
 		return
 	}
@@ -51,7 +51,7 @@ func (r *Repository) MarkRequiresCredentials(message string) {
 		return
 	}
 
-	r.MarkDirty()
+	r.MarkDisabled()
 	r.SetWorkStatus(Fail)
 	if r.State == nil {
 		return
@@ -71,7 +71,7 @@ func (r *Repository) markErrorState(message string, recoverable bool) {
 		return
 	}
 
-	r.MarkDirty()
+	r.MarkDisabled()
 	r.SetWorkStatus(Fail)
 	if r.State == nil {
 		return

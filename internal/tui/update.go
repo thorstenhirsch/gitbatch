@@ -38,27 +38,13 @@ func shouldThrottleCheck(lastCheck *time.Time, interval time.Duration) bool {
 
 func listenRepositoryUpdatesCmd() tea.Cmd {
 	return func() tea.Msg {
-		// Throttle to max 30 FPS (33ms) to prevent starving keyboard input
-		if !shouldThrottleCheck(&lastRepositoryUpdateCheck, 33*time.Millisecond) {
-			return nil
+		<-repositoryUpdateCh
+		// Drain any additional updates to batch them
+		for len(repositoryUpdateCh) > 0 {
+			<-repositoryUpdateCh
 		}
-
-		select {
-		case <-repositoryUpdateCh:
-			// Drain any additional updates to batch them
-			for len(repositoryUpdateCh) > 0 {
-				<-repositoryUpdateCh
-			}
-			return repositoryStateChangedMsg{}
-		default:
-			return nil
-		}
+		return repositoryStateChangedMsg{}
 	}
-}
-
-func withListener(cmds ...tea.Cmd) tea.Cmd {
-	cmds = append(cmds, listenRepositoryUpdatesCmd())
-	return tea.Batch(cmds...)
 }
 
 func enqueueRepositoryUpdate(repo *git.Repository) {
@@ -82,7 +68,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.ready = true
 		cmd := m.maybeStartInitialStateEvaluation(nil)
-		return m, withListener(cmd)
+		return m, cmd
 
 	case repositoriesLoadedMsg:
 		// Add all loaded repositories to the model
@@ -103,7 +89,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		// Now that all repos are visible, start the state evaluation
 		cmd := m.maybeStartInitialStateEvaluation(nil)
-		return m, withListener(cmd)
+		return m, cmd
 
 	case repositoryLoadedMsg:
 		// This message type is no longer used but kept for compatibility
@@ -124,7 +110,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.loading = false
-		return m, withListener()
+		return m, nil
 
 	case repositoryStateChangedMsg:
 		// Throttle expensive updateJobsRunningFlag() to avoid O(n) iteration on every state change
@@ -133,32 +119,40 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Only schedule tick if jobs are running
 			if m.jobsRunning {
-				return m, withListener(tickCmd())
+				return m, tea.Batch(tickCmd(), listenRepositoryUpdatesCmd())
 			}
 		}
-		return m, withListener()
+		return m, listenRepositoryUpdatesCmd()
 
 	case repositoriesWaitingMsg:
 		// Initial state evaluation has been scheduled for all repos
 		// Trigger a tick to keep the UI responsive
-		return m, withListener(tickCmd())
+		return m, tickCmd()
 
 	case lazygitClosedMsg:
 		repo := msg.repo
 		if repo != nil {
-			if repo.State != nil {
-				repo.State.Message = "waiting"
+			// Only re-evaluate if the repository state has changed
+			if repo.GetDigest() != msg.originalDigest {
+				if repo.State != nil {
+					repo.State.Message = "waiting"
+				}
+				repo.SetWorkStatus(git.Pending)
+				repo.NotifyRepositoryUpdated()
+				command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
+				m.jobsRunning = true
+				return m, tickCmd()
 			}
-			repo.SetWorkStatus(git.Pending)
+			// No changes detected, restore status
+			if repo.State != nil {
+				*repo.State = msg.originalState
+			}
 			repo.NotifyRepositoryUpdated()
-			command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
-			m.jobsRunning = true
-			return m, withListener(tickCmd())
 		}
 		if m.updateJobsRunningFlag() {
-			return m, withListener(tickCmd())
+			return m, tickCmd()
 		}
-		return m, withListener()
+		return m, nil
 
 	case jobCompletedMsg:
 		if m.jobsRunning {
@@ -172,27 +166,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Schedule next tick if jobs are still running
 		if m.jobsRunning {
-			return m, withListener(tickCmd())
+			return m, tickCmd()
 		}
-		return m, withListener()
+		return m, nil
 
 	case repoActionResultMsg:
 		m.ensureSelectionWithinBounds(msg.panel)
-		return m, withListener()
+		return m, nil
 
 	case errMsg:
 		m.err = msg.err
-		return m, withListener()
+		return m, nil
 
 	case autoFetchFailedMsg:
 		m.jobsRunning = false
 		// Auto-fetch failures are recorded on the affected repositories and should
 		// not pollute the global status bar. Leave m.err untouched so the user only
 		// sees errors when focusing the specific repo.
-		return m, withListener()
+		return m, nil
 	}
 
-	return m, withListener()
+	return m, nil
 } // handleKeyPress processes keyboard input
 func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
@@ -247,12 +241,21 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
 			r := m.repositories[m.cursor]
 			if isLazygitAvailable() {
+				// Snapshot the current state BEFORE setting it to Working
+				// This ensures we restore the correct state (e.g. RecoverableError) if no changes occur
+				var savedState git.RepositoryState
+				if r.State != nil {
+					savedState = *r.State
+				}
+
 				r.SetWorkStatus(git.Working)
+				digest := r.GetDigest()
+
 				cmd := tea.ExecProcess(exec.Command("lazygit", "-p", r.AbsPath), func(err error) tea.Msg {
 					if err != nil {
 						return errMsg{err: err}
 					}
-					return lazygitClosedMsg{repo: r}
+					return lazygitClosedMsg{repo: r, originalDigest: digest, originalState: savedState}
 				})
 				if m.updateJobsRunningFlag() {
 					return m, tea.Batch(cmd, tickCmd())
@@ -358,11 +361,11 @@ func (m *Model) openCredentialDialog(repo *git.Repository) {
 	if repo == nil {
 		return
 	}
-	
+
 	// Create a job for this repository based on its remote operation
 	// Try to infer the operation type from the state
 	jobType := job.FetchJob // Default to fetch
-	
+
 	// Check if there's already a job in the queue for this repo
 	var existingJob *job.Job
 	for _, prompt := range m.credentialPromptQueue {
@@ -371,7 +374,7 @@ func (m *Model) openCredentialDialog(repo *git.Repository) {
 			break
 		}
 	}
-	
+
 	if existingJob == nil {
 		existingJob = &job.Job{
 			JobType:    jobType,
@@ -382,14 +385,14 @@ func (m *Model) openCredentialDialog(repo *git.Repository) {
 			},
 		}
 	}
-	
+
 	prompt := &credentialPrompt{
 		repo:     repo,
 		job:      existingJob,
 		username: "",
 		password: "",
 	}
-	
+
 	// Add to queue and activate immediately if no active prompt
 	if m.activeCredentialPrompt == nil {
 		m.activeCredentialPrompt = prompt
@@ -648,10 +651,15 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		// Check if current repository requires credentials
 		repo := m.currentRepository()
-		if repo != nil && repo.State != nil && repo.State.RequiresCredentials && repo.WorkStatus() == git.Fail {
-			// Open credential dialog for this repository
-			m.openCredentialDialog(repo)
-			return m, nil
+		if repo != nil && repo.State != nil && repo.State.RequiresCredentials {
+			// Allow entering credentials if the repo is failed or available (e.g. after lazygit close)
+			// but not if it's currently working/queued/pending
+			ws := repo.WorkStatus()
+			if ws != git.Working && ws != git.Queued && ws != git.Pending {
+				// Open credential dialog for this repository
+				m.openCredentialDialog(repo)
+				return m, nil
+			}
 		}
 		return m, m.startQueue()
 

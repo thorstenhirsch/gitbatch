@@ -111,9 +111,9 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 	applyCleanliness(repo)
 	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
-	// Verify: should be clean (no local changes means no conflicts)
+	// Verify: should be clean and automatically queued since fast-forward will succeed
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean despite incoming commits")
-	require.Equal(t, git.Available, repo.WorkStatus(), "status should be Available")
+	require.Equal(t, git.Queued, repo.WorkStatus(), "status should be Queued (automatically tagged)")
 }
 
 // TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits tests the scenario where
@@ -221,13 +221,13 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 
 	// Verify: should be clean (fast-forward would succeed)
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean - fast-forward would succeed")
-	require.Equal(t, git.Available, repo.WorkStatus(), "status should be Available")
+	require.Equal(t, git.Queued, repo.WorkStatus(), "status should be Queued")
 }
 
 // TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict tests the scenario where
 // the working tree has uncommitted changes, there are incoming commits, and fast-forward
 // would fail due to actual merge conflicts.
-// Expected: Repository should be marked as dirty.
+// Expected: Repository should be marked as disabled.
 func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *testing.T) {
 	th := git.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
@@ -305,8 +305,8 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *
 	applyCleanliness(repo)
 	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
-	// Verify: should be dirty (merge conflict would occur)
-	require.False(t, repo.State.Branch.Clean, "repository should be marked as dirty - merge conflict")
+	// Verify: should be disabled (merge conflict would occur)
+	require.False(t, repo.State.Branch.Clean, "repository should be marked as disabled - merge conflict")
 	require.Equal(t, git.Available, repo.WorkStatus(), "status should be Available")
 }
 
@@ -500,7 +500,7 @@ func TestApplyCleanliness_UpstreamNotConfigured(t *testing.T) {
 
 // TestApplyCleanliness_UncleanWithIncomingFFSucceeds is a focused test for the specific bug:
 // Unclean working tree + upstream is set and valid + incoming commits + fast-forward succeeds.
-// This should be marked as CLEAN, but was being marked as DIRTY.
+// This should be marked as CLEAN, but was being marked as DISABLED.
 func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 	// Create a new temporary directory for this test
 	testDir, err := os.MkdirTemp("", "gitbatch-test")
@@ -599,5 +599,5 @@ func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 
 	// Verify: should be clean (fast-forward would succeed, no conflicts)
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as CLEAN - fast-forward would succeed with non-conflicting changes")
-	require.Equal(t, git.Available, repo.WorkStatus(), "status should be Available")
+	require.Equal(t, git.Queued, repo.WorkStatus(), "status should be Queued")
 }

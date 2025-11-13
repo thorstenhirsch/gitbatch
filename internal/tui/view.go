@@ -584,7 +584,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	// During evaluation (Working), keep showing the spinner.
 	if dirty && !failed && status.Ready {
 		statusIcon = dirtySymbol
-		style = m.styles.DirtyItem
+		style = m.styles.DisabledItem
 	}
 
 	cursor := " "
@@ -599,7 +599,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	repoName := truncateString(r.Name, repoNameWidth)
 	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
 	if dirty && !failed && !selected {
-		repoColumn = m.styles.DirtyItem.Render(repoColumn)
+		repoColumn = m.styles.DisabledItem.Render(repoColumn)
 	}
 
 	branchContentWidth := colWidths.branch - 1
@@ -609,7 +609,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	branchContent := truncateString(branchContent(r), branchContentWidth)
 	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
 	if dirty && !failed && !selected {
-		branchColumn = m.styles.DirtyItem.Render(branchColumn)
+		branchColumn = m.styles.DisabledItem.Render(branchColumn)
 	}
 
 	commitContentWidth := colWidths.commitMsg - 1
@@ -630,7 +630,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	commitContent := visibleCommitContent(fullCommitContent, offset, commitContentWidth)
 	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
 	if dirty && !failed && !selected {
-		commitColumn = m.styles.DirtyItem.Render(commitColumn)
+		commitColumn = m.styles.DisabledItem.Render(commitColumn)
 	}
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
@@ -644,7 +644,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		case failed:
 			highlight = m.styles.FailedSelectedItem
 		case dirty:
-			highlight = m.styles.DirtySelectedItem
+			highlight = m.styles.DisabledSelectedItem
 		default:
 			highlight = m.styles.SelectedItem
 		}
@@ -1486,9 +1486,9 @@ func (m *Model) renderStatusBar() string {
 				center = truncateString(message, maxCenter)
 			}
 		} else if dirty {
-			statusBarStyle = m.styles.StatusBarDirty
-			left = " repo dirty"
-			center = "Only TAB (lazygit) permitted while working tree is dirty"
+			statusBarStyle = m.styles.StatusBarDisabled
+			left = " repo disabled"
+			center = "Only TAB (lazygit) permitted while working tree is disabled"
 			right = "TAB: lazygit"
 		} else if m.err != nil {
 			statusBarStyle = m.styles.StatusBarPush

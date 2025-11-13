@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -497,4 +498,30 @@ func Create(dir string) (*Repository, error) {
 		return nil, err
 	}
 	return InitializeRepo(dir)
+}
+
+// GetDigest returns a string representing the current state of the repository.
+// It includes the HEAD hash and modification times of critical git files.
+// This is used to detect if the repository state has changed (e.g. by external tools).
+func (r *Repository) GetDigest() string {
+	head, err := r.Repo.Head()
+	headHash := ""
+	if err == nil {
+		headHash = head.Hash().String()
+	}
+
+	// Helper to get modtime
+	getModTime := func(path string) string {
+		info, err := os.Stat(filepath.Join(r.AbsPath, ".git", path))
+		if err != nil {
+			return ""
+		}
+		return info.ModTime().Format(time.RFC3339Nano)
+	}
+
+	indexMod := getModTime("index")
+	fetchHeadMod := getModTime("FETCH_HEAD")
+	headMod := getModTime("HEAD")
+
+	return fmt.Sprintf("%s|%s|%s|%s", headHash, indexMod, fetchHeadMod, headMod)
 }

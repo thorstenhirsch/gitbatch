@@ -10,13 +10,13 @@ import (
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
-// TestDirtyState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails tests the complete scenario where:
+// TestDisabledState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails tests the complete scenario where:
 // 1. Repository has unclean working tree (uncommitted local changes)
 // 2. Upstream is correctly configured
 // 3. git fetch succeeds
 // 4. git merge --ff-only dry-run fails due to conflicts
-// Expected: Repository should be marked as DIRTY
-func TestDirtyState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails(t *testing.T) {
+// Expected: Repository should be marked as DISABLED
+func TestDisabledState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails(t *testing.T) {
 	// Create a test directory
 	testDir, err := os.MkdirTemp("", "gitbatch-dirty-test")
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestDirtyState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails(t *testi
 	// The current implementation treats "would be overwritten" as TRUE (fast-forward would succeed).
 	// This is the documented behavior - if the only issue is uncommitted local changes,
 	// the fast-forward itself is viable, so it returns true.
-	// The user's test requirement suggests they want this to be DIRTY, but the current
+	// The user's test requirement suggests they want this to be DISABLED, but the current
 	// implementation marks it as CLEAN. This test documents the actual behavior.
 
 	// Apply the full cleanliness check
@@ -125,11 +125,11 @@ func TestDirtyState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails(t *testi
 
 	// Document actual behavior: When local uncommitted changes conflict with incoming commits,
 	// git says "would be overwritten", which is treated as "ff would succeed",
-	// resulting in CLEAN status (not DIRTY as might be expected).
-	t.Logf("Final Clean state: %v (expected: false/DIRTY, actual implementation may give true/CLEAN)", repo.State.Branch.Clean)
+	// resulting in CLEAN status (not DISABLED as might be expected).
+	t.Logf("Final Clean state: %v (expected: false/DISABLED, actual implementation may give true/CLEAN)", repo.State.Branch.Clean)
 	t.Logf("Final WorkStatus: %v", repo.WorkStatus())
 
 	// The test passes if fastForwardDryRunSucceeds correctly detects the scenario
-	// For a true DIRTY result, we'd need an actual merge conflict that git detects,
+	// For a true DISABLED result, we'd need an actual merge conflict that git detects,
 	// not just "would be overwritten by merge"
 }

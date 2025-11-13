@@ -139,7 +139,7 @@ type Styles struct {
 	StatusBarCredentials          lipgloss.Style
 	StatusBarRebase               lipgloss.Style
 	StatusBarPush                 lipgloss.Style
-	StatusBarDirty                lipgloss.Style
+	StatusBarDisabled             lipgloss.Style
 	StatusBarError                lipgloss.Style
 	Help                          lipgloss.Style
 	List                          lipgloss.Style
@@ -147,7 +147,7 @@ type Styles struct {
 	RecoverableFailedSelectedItem lipgloss.Style
 	CredentialsSelectedItem       lipgloss.Style
 	SelectedItem                  lipgloss.Style
-	DirtySelectedItem             lipgloss.Style
+	DisabledSelectedItem          lipgloss.Style
 	CommonSelectedItem            lipgloss.Style
 	FailedSelectedItem            lipgloss.Style
 	RecoverableFailedItem         lipgloss.Style
@@ -157,7 +157,7 @@ type Styles struct {
 	WorkingItem                   lipgloss.Style
 	SuccessItem                   lipgloss.Style
 	FailedItem                    lipgloss.Style
-	DirtyItem                     lipgloss.Style
+	DisabledItem                  lipgloss.Style
 	BranchInfo                    lipgloss.Style
 	KeyBinding                    lipgloss.Style
 	Panel                         lipgloss.Style
@@ -186,7 +186,7 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#A5D6A7", Dark: "#43A047"}).
 			Padding(0, 1),
-		StatusBarDirty: lipgloss.NewStyle().
+		StatusBarDisabled: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#F5F5F5"}).
 			Background(lipgloss.AdaptiveColor{Light: "#D7CCC8", Dark: "#4A3728"}).
 			Padding(0, 1),
@@ -218,7 +218,7 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
 			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
 			Bold(true),
-		DirtySelectedItem: lipgloss.NewStyle().
+		DisabledSelectedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#F5F5F5"}).
 			Background(lipgloss.AdaptiveColor{Light: "#D7CCC8", Dark: "#4A3728"}).
 			Bold(true),
@@ -248,7 +248,7 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#EF6C00", Dark: "#FFA726"}),
 		CredentialsItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#EC407A", Dark: "#F48FB1"}),
-		DirtyItem: lipgloss.NewStyle().
+		DisabledItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#9A7B4F"}),
 		BranchInfo: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#00796B", Dark: "#4DB6AC"}),
@@ -331,7 +331,9 @@ func (e errMsg) Error() string { return e.err.Error() }
 
 // lazygitClosedMsg is sent when lazygit exits
 type lazygitClosedMsg struct {
-	repo *git.Repository
+	repo           *git.Repository
+	originalDigest string
+	originalState  git.RepositoryState
 }
 
 // jobCompletedMsg is sent when a job completes (success or failure)

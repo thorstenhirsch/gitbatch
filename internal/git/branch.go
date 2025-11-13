@@ -53,11 +53,23 @@ func (r *Repository) initBranches() error {
 	}
 	var branchFound bool
 	var push, pull string
+
+	// Check cleanliness once for the repository, not for every branch
+	isRepoClean := r.isClean()
+
 	_ = bs.ForEach(func(b *plumbing.Reference) error {
 		if b.Type() != plumbing.HashReference {
 			return nil
 		}
-		clean := r.isClean()
+
+		// Cleanliness is a property of the working tree, which is associated with the current HEAD.
+		// We only set it accurately for the HEAD branch. For others, it's not really applicable
+		// in the same way, but we default to true (clean) to avoid false positives if used elsewhere.
+		clean := true
+		if b.Name() == headRef.Name() {
+			clean = isRepoClean
+		}
+
 		branch := &Branch{
 			Name:      b.Name().Short(),
 			Reference: b,
@@ -81,7 +93,7 @@ func (r *Repository) initBranches() error {
 			State:     &BranchState{},
 			Pushables: "?",
 			Pullables: "?",
-			Clean:     r.isClean(),
+			Clean:     isRepoClean,
 		}
 		lbs = append(lbs, branch)
 		r.State.Branch = branch
