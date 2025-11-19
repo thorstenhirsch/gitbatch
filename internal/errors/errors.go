@@ -49,7 +49,9 @@ const (
 	ErrOverwrittenByMerge GitError = ("move or remove un-tracked files before merge")
 	// ErrUserEmailNotSet is thrown if there is no configured user email while
 	// commit command
-	ErrUserEmailNotSet GitError = ("user email not configured")
+	ErrUserEmailNotSet GitError = "user email not set"
+	// ErrCredentialPromptDetected is thrown when a credential prompt is detected in the output
+	ErrCredentialPromptDetected GitError = "credential prompt detected"
 	// ErrNetworkTimeout is thrown when network operations timeout
 	ErrNetworkTimeout GitError = ("network timeout")
 	// ErrNetworkUnreachable is thrown when network is unreachable
@@ -105,24 +107,9 @@ func RequiresCredentials(err error) bool {
 		return false
 	}
 
-	// Only treat exit code 128 as requiring credentials if we can't classify it better
-	// This is a fallback for unclassified exit 128 errors that might be auth-related
-	if code, ok := exitCodeFromError(err); ok && code == 128 {
-		// Check if this is already classified as a different error type
-		if gerr, ok := err.(gitErrorWithExitCode); ok {
-			// If it's already classified as something else, don't treat as credentials
-			switch gerr.GitError {
-			case ErrRemoteNotFound, ErrNetworkTimeout, ErrNetworkUnreachable, ErrDNSError, ErrSSLError:
-				return false
-			}
-		}
-		// For unclassified exit 128, assume it might be credentials (fallback)
-		return true
-	}
-
 	// Check for specific error types
 	switch err {
-	case ErrAuthenticationRequired, ErrPermissionDenied, ErrAuthorizationFailed:
+	case ErrAuthenticationRequired, ErrPermissionDenied, ErrAuthorizationFailed, ErrCredentialPromptDetected:
 		return true
 	}
 

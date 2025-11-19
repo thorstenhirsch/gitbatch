@@ -6,11 +6,37 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
+
+	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 )
+
+var credentialPrompts = []*regexp.Regexp{
+	regexp.MustCompile(`Password:`),
+	regexp.MustCompile(`.+['’]s password:`),
+	regexp.MustCompile(`Password\s*for\s*'.+':`),
+	regexp.MustCompile(`Username\s*for\s*'.+':`),
+	regexp.MustCompile(`Enter\s*passphrase\s*for\s*key\s*'.+':`),
+	regexp.MustCompile(`Enter\s*PIN\s*for\s*.+\s*key\s*.+:`),
+	regexp.MustCompile(`Enter\s*PIN\s*for\s*'.+':`),
+	regexp.MustCompile(`.*2FA Token.*`),
+}
+
+type scanningWriter struct {
+	buf      bytes.Buffer
+	callback func([]byte)
+}
+
+func (w *scanningWriter) Write(p []byte) (n int, err error) {
+	if w.callback != nil {
+		w.callback(p)
+	}
+	return w.buf.Write(p)
+}
 
 // Run runs the OS command and return its output. If the output
 // returns error it also encapsulates it as a golang.error which is a return code
@@ -43,7 +69,20 @@ func RunWithContextTimeout(ctx context.Context, d string, c string, args []strin
 	if runtime.GOOS != "windows" {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
-	var buf bytes.Buffer
+	var buf scanningWriter
+	credentialDetected := false
+	buf.callback = func(p []byte) {
+		s := string(p)
+		for _, re := range credentialPrompts {
+			if re.MatchString(s) {
+				credentialDetected = true
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+				return
+			}
+		}
+	}
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Start(); err != nil {
@@ -64,34 +103,52 @@ func RunWithContextTimeout(ctx context.Context, d string, c string, args []strin
 		if timer != nil {
 			timer.Stop()
 		}
-		return trimTrailingNewline(buf.String()), err
+		if credentialDetected {
+			return trimTrailingNewline(buf.buf.String()), gerr.ErrCredentialPromptDetected
+		}
+		return trimTrailingNewline(buf.buf.String()), err
 	case <-ctx.Done():
 		if timer != nil {
 			timer.Stop()
 		}
 		err := <-done
-		if ctx.Err() != nil {
-			return trimTrailingNewline(buf.String()), ctx.Err()
+		if credentialDetected {
+			return trimTrailingNewline(buf.buf.String()), gerr.ErrCredentialPromptDetected
 		}
-		return trimTrailingNewline(buf.String()), err
+		if ctx.Err() != nil {
+			return trimTrailingNewline(buf.buf.String()), ctx.Err()
+		}
+		return trimTrailingNewline(buf.buf.String()), err
 	case <-timeoutC:
 		if timer != nil {
 			timer.Stop()
 		}
 		go func() {
+			// If we timed out, it might be because it was waiting for a prompt we missed
+			// or just slow.
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
 			<-done
 		}()
-		return trimTrailingNewline(buf.String()), context.DeadlineExceeded
+		if credentialDetected {
+			return trimTrailingNewline(buf.buf.String()), gerr.ErrCredentialPromptDetected
+		}
+		return trimTrailingNewline(buf.buf.String()), context.DeadlineExceeded
 	}
 }
 
 func enrichGitEnv(base []string) []string {
 	env := make([]string, len(base))
 	copy(env, base)
-	env = ensureEnv(env, "GIT_TERMINAL_PROMPT", "0")
+	// We don't disable terminal prompts anymore, because we want to detect them
+	// and return a proper error.
+	// env = ensureEnv(env, "GIT_TERMINAL_PROMPT", "0")
 	env = ensureEnv(env, "GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1")
 	env = ensureEnv(env, "GIT_HTTP_LOW_SPEED_LIMIT", "1")
 	env = ensureEnv(env, "GIT_HTTP_LOW_SPEED_TIME", "10")
+	env = ensureEnv(env, "LANG", "C")
+	env = ensureEnv(env, "LC_ALL", "C")
 	return env
 }
 

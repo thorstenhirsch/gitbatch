@@ -43,6 +43,20 @@ func listenRepositoryUpdatesCmd() tea.Cmd {
 		for len(repositoryUpdateCh) > 0 {
 			<-repositoryUpdateCh
 		}
+
+		// Throttle to max 60 FPS (approx 16ms) to prevent event loop saturation
+		// This ensures we don't flood the main loop with updates, keeping the UI responsive
+		updateCheckMutex.Lock()
+		elapsed := time.Since(lastRepositoryUpdateCheck)
+		if elapsed < 16*time.Millisecond {
+			wait := 16*time.Millisecond - elapsed
+			updateCheckMutex.Unlock()
+			time.Sleep(wait)
+			updateCheckMutex.Lock()
+		}
+		lastRepositoryUpdateCheck = time.Now()
+		updateCheckMutex.Unlock()
+
 		return repositoryStateChangedMsg{}
 	}
 }

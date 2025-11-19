@@ -89,6 +89,11 @@ func TestRequiresCredentials(t *testing.T) {
 		{
 			name:     "exit status 128",
 			err:      exitCodeError{code: 128},
+			expected: false,
+		},
+		{
+			name:     "ErrCredentialPromptDetected",
+			err:      ErrCredentialPromptDetected,
 			expected: true,
 		},
 		{
