@@ -439,6 +439,14 @@ func TestFastForwardDryRunSucceeds_WouldBeOverwritten(t *testing.T) {
 	require.True(t, succeeds, "should return true when error is 'would be overwritten by merge'")
 }
 
+// mockExitCoder implements the exitCoder interface for testing
+type mockExitCoder struct {
+	code int
+}
+
+func (m mockExitCoder) Error() string { return "mock error" }
+func (m mockExitCoder) ExitCode() int { return m.code }
+
 // TestIsGitFatalError tests the exit code 128 detection.
 func TestIsGitFatalError(t *testing.T) {
 	tests := []struct {
@@ -454,6 +462,16 @@ func TestIsGitFatalError(t *testing.T) {
 		{
 			name:     "non-exec error",
 			err:      fmt.Errorf("some error"),
+			expected: false,
+		},
+		{
+			name:     "exit code 128 via interface",
+			err:      mockExitCoder{code: 128},
+			expected: true,
+		},
+		{
+			name:     "exit code 1 via interface",
+			err:      mockExitCoder{code: 1},
 			expected: false,
 		},
 		{

@@ -336,29 +336,61 @@ func (b *Branch) HasIncomingCommits() bool {
 	return count > 0
 }
 
-// IsClean checks if the working tree is clean according to git status.
-// Returns true if git reports "working tree clean" or "working directory clean".
-func (r *Repository) IsClean() bool {
-	args := []string{"status"}
+// WorkTreeStatus represents the status of the working tree
+type WorkTreeStatus struct {
+	Clean        bool
+	HasConflicts bool
+}
+
+// GetWorkTreeStatus checks the working tree status using git status --porcelain.
+// It returns whether the tree is clean and if there are any conflicts.
+func (r *Repository) GetWorkTreeStatus() (WorkTreeStatus, error) {
+	args := []string{"status", "--porcelain"}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = r.AbsPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return false
+		return WorkTreeStatus{}, err
 	}
+
 	s := string(out)
-	s = strings.TrimSuffix(s, "\n")
-	if len(s) >= 0 {
-		vs := strings.Split(s, "\n")
-		line := vs[len(vs)-1]
-		// earlier versions of git returns "working directory clean" instead of
-		//"working tree clean" message
-		if strings.Contains(line, "working tree clean") ||
-			strings.Contains(line, "working directory clean") {
-			return true
+	if len(strings.TrimSpace(s)) == 0 {
+		return WorkTreeStatus{Clean: true, HasConflicts: false}, nil
+	}
+
+	hasConflicts := false
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		if len(line) < 2 {
+			continue
+		}
+		// XY format.
+		// U = Unmerged
+		// DD = both deleted
+		// AU = added by us
+		// UD = deleted by them
+		// UA = added by them
+		// DU = deleted by us
+		// AA = both added
+		// UU = both modified
+		status := line[:2]
+		if strings.Contains(status, "U") || status == "DD" || status == "AA" {
+			hasConflicts = true
+			break
 		}
 	}
-	return false
+
+	return WorkTreeStatus{Clean: false, HasConflicts: hasConflicts}, nil
+}
+
+// IsClean checks if the working tree is clean according to git status.
+// Deprecated: Use GetWorkTreeStatus instead.
+func (r *Repository) IsClean() bool {
+	status, err := r.GetWorkTreeStatus()
+	if err != nil {
+		return false
+	}
+	return status.Clean
 }
 
 func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {

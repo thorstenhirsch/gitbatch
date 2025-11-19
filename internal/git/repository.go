@@ -133,6 +133,17 @@ func gitSemaphore() *semaphore.Weighted {
 	return gitQueueSemaphore
 }
 
+// AcquireGitSemaphore acquires a token from the global git semaphore.
+// This allows external packages to respect the concurrency limit for git operations.
+func AcquireGitSemaphore(ctx context.Context) error {
+	return gitSemaphore().Acquire(ctx, 1)
+}
+
+// ReleaseGitSemaphore releases a token to the global git semaphore.
+func ReleaseGitSemaphore() {
+	gitSemaphore().Release(1)
+}
+
 // RepositoryHook represents a function that is executed after a repository has been initialized.
 type RepositoryHook func(*Repository)
 
@@ -523,5 +534,9 @@ func (r *Repository) GetDigest() string {
 	fetchHeadMod := getModTime("FETCH_HEAD")
 	headMod := getModTime("HEAD")
 
-	return fmt.Sprintf("%s|%s|%s|%s", headHash, indexMod, fetchHeadMod, headMod)
+	// Read HEAD content directly to detect symbolic ref changes even if hash is same
+	// and modtime resolution is insufficient or missed.
+	headContent, _ := os.ReadFile(filepath.Join(r.AbsPath, ".git", "HEAD"))
+
+	return fmt.Sprintf("%s|%s|%s|%s|%s", headHash, indexMod, fetchHeadMod, headMod, string(headContent))
 }

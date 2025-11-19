@@ -48,6 +48,15 @@ func isGitFatalError(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	// Check if the error implements ExitCode() int
+	type exitCoder interface {
+		ExitCode() int
+	}
+	if coder, ok := err.(exitCoder); ok {
+		return coder.ExitCode() == 128
+	}
+
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -114,7 +123,18 @@ func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
 		return
 	}
 
+	wasRecoverable := r.State.RecoverableError
 	applySuccessState(r, outcome)
+
+	// If we just refreshed a repository that was in a recoverable error state,
+	// trigger a state probe to verify if the error persists (e.g. network issues,
+	// missing upstream). This ensures we don't blindly clear errors just because
+	// the metadata reload succeeded.
+	if outcome.Operation == OperationRefresh && wasRecoverable {
+		handleStateProbe(r)
+		return
+	}
+
 	applyCleanliness(r)
 }
 
@@ -251,6 +271,17 @@ func scheduleUpstreamVerificationAndFetch(r *git.Repository, remoteName, remoteB
 			// First verify the upstream exists
 			exists, err := upstreamExistsOnRemoteWithContext(ctx, r, remoteName, remoteBranch)
 			if err != nil {
+				// Check if it is explicitly recoverable
+				if gerr.IsRecoverable(err) {
+					recoverable := true
+					return OperationOutcome{
+						Operation:           OperationStateProbe,
+						Err:                 err,
+						Message:             fmt.Sprintf("unable to verify upstream: %v", err),
+						RecoverableOverride: &recoverable,
+					}
+				}
+
 				// Fatal errors (exit 128) should be critical, not recoverable
 				// These include: network failures, permission denied, repo not found
 				recoverable := !isGitFatalError(err)
@@ -287,6 +318,9 @@ func scheduleUpstreamVerificationAndFetch(r *git.Repository, remoteName, remoteB
 			var recoverableOverride *bool
 			if err != nil {
 				recoverable := !isGitFatalError(err)
+				if gerr.IsRecoverable(err) {
+					recoverable = true
+				}
 				recoverableOverride = &recoverable
 			}
 			return OperationOutcome{
@@ -317,7 +351,7 @@ func upstreamExistsOnRemoteWithContext(ctx context.Context, r *git.Repository, r
 	args := []string{"ls-remote", "--heads", remoteName, branchRef}
 	out, err := RunWithContextTimeout(ctx, r.AbsPath, "git", args, DefaultFetchTimeout)
 	if err != nil {
-		return false, err
+		return false, gerr.ParseGitError(out, err)
 	}
 	return strings.TrimSpace(out) != "", nil
 }
@@ -327,8 +361,13 @@ func applySuccessState(r *git.Repository, outcome OperationOutcome) {
 		return
 	}
 
-	// Reset recoverable flag on success paths.
-	r.State.RecoverableError = false
+	// Reset recoverable flag on success paths, but preserve it for Refresh operations
+	// because Refresh only reloads metadata and doesn't verify if the error condition
+	// (e.g. network issue, missing upstream) is resolved. We'll handle verification
+	// via state probe in EvaluateRepositoryState.
+	if outcome.Operation != OperationRefresh {
+		r.State.RecoverableError = false
+	}
 
 	message := strings.TrimSpace(outcome.Message)
 	prevMessage := ""
@@ -437,10 +476,25 @@ func applyCleanlinessAsync(r *git.Repository) {
 		return
 	}
 
+	// Acquire semaphore to limit concurrent git status operations
+	if err := git.AcquireGitSemaphore(context.Background()); err != nil {
+		// If we can't acquire semaphore, we can't check cleanliness safely
+		return
+	}
+	defer git.ReleaseGitSemaphore()
+
 	branch := r.State.Branch
 
 	// Check if the working tree is clean according to git
-	workingTreeClean := r.IsClean()
+	// Use GetWorkTreeStatus to get both clean state and conflict state in one go
+	status, err := r.GetWorkTreeStatus()
+	if err != nil {
+		// If git status fails, we can't determine state. Keep as is or mark error?
+		// For now, just return to avoid incorrect state.
+		return
+	}
+	workingTreeClean := status.Clean
+	hasConflicts := status.HasConflicts
 
 	if branch.HasIncomingCommits() {
 		upstream := branch.Upstream
@@ -495,7 +549,11 @@ func applyCleanlinessAsync(r *git.Repository) {
 	}
 
 	// No incoming commits - the branch is up-to-date with upstream.
-	r.MarkClean()
+	if hasConflicts {
+		r.MarkDisabled()
+	} else {
+		r.MarkClean()
+	}
 	if r.WorkStatus() != git.Available {
 		r.SetWorkStatus(git.Available)
 	}

@@ -14,6 +14,21 @@ import (
 	"github.com/thorstenhirsch/gitbatch/internal/job"
 )
 
+const (
+	// TargetFPS is the maximum frames per second we want to achieve
+	TargetFPS = 60
+	// FrameDuration is the minimum duration between frames
+	FrameDuration = time.Second / TargetFPS
+
+	// SpinnerFPS is the update rate for the spinner
+	SpinnerFPS = 15
+	// SpinnerDuration is the duration between spinner updates
+	SpinnerDuration = time.Second / SpinnerFPS
+
+	// JobCheckInterval is how often we check for running jobs status
+	JobCheckInterval = 100 * time.Millisecond
+)
+
 var repositoryUpdateCh = make(chan struct{}, 256)
 
 // Throttle timings to prevent event loop starvation and excessive O(n) checks
@@ -44,12 +59,12 @@ func listenRepositoryUpdatesCmd() tea.Cmd {
 			<-repositoryUpdateCh
 		}
 
-		// Throttle to max 60 FPS (approx 16ms) to prevent event loop saturation
+		// Throttle to max TargetFPS to prevent event loop saturation
 		// This ensures we don't flood the main loop with updates, keeping the UI responsive
 		updateCheckMutex.Lock()
 		elapsed := time.Since(lastRepositoryUpdateCheck)
-		if elapsed < 16*time.Millisecond {
-			wait := 16*time.Millisecond - elapsed
+		if elapsed < FrameDuration {
+			wait := FrameDuration - elapsed
 			updateCheckMutex.Unlock()
 			time.Sleep(wait)
 			updateCheckMutex.Lock()
@@ -153,7 +168,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				repo.SetWorkStatus(git.Pending)
 				repo.NotifyRepositoryUpdated()
-				command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
+				_ = command.ScheduleRepositoryRefresh(repo, nil)
 				m.jobsRunning = true
 				return m, tickCmd()
 			}
@@ -174,7 +189,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Throttle expensive O(n) check
-		if shouldThrottleCheck(&lastJobsFlagUpdate, 100*time.Millisecond) {
+		if shouldThrottleCheck(&lastJobsFlagUpdate, JobCheckInterval) {
 			m.updateJobsRunningFlag()
 		}
 
