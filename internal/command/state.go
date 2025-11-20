@@ -72,10 +72,6 @@ func isGitFatalError(err error) bool {
 // It is invoked after auto-fetch, queued jobs, and lazygit refreshes to ensure
 // consistent clean/disabled and error handling across the application.
 func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
-	if r == nil || r.State == nil {
-		return
-	}
-
 	if outcome.Operation == OperationStateProbe {
 		// Check if this is an initial state probe request (no message/result yet)
 		// vs. a completion (has message or error from the async operation)
@@ -194,9 +190,6 @@ type stateSnapshot struct {
 }
 
 func snapshotState(r *git.Repository) stateSnapshot {
-	if r == nil || r.State == nil {
-		return stateSnapshot{}
-	}
 	return stateSnapshot{
 		status:      r.WorkStatus(),
 		message:     r.State.Message,
@@ -205,9 +198,6 @@ func snapshotState(r *git.Repository) stateSnapshot {
 }
 
 func stateChanged(prev stateSnapshot, r *git.Repository) bool {
-	if r == nil || r.State == nil {
-		return false
-	}
 	if prev.status != r.WorkStatus() {
 		return true
 	}
@@ -221,10 +211,6 @@ func stateChanged(prev stateSnapshot, r *git.Repository) bool {
 }
 
 func handleStateProbe(r *git.Repository) {
-	if r == nil || r.State == nil {
-		return
-	}
-
 	setRepositoryStatus(r, git.Pending, "waiting")
 
 	branch := r.State.Branch
@@ -256,9 +242,6 @@ func handleStateProbe(r *git.Repository) {
 // scheduleUpstreamVerificationAndFetch asynchronously verifies the upstream exists and then fetches.
 // This prevents blocking the TUI during initial state probe operations.
 func scheduleUpstreamVerificationAndFetch(r *git.Repository, remoteName, remoteBranch string) error {
-	if r == nil {
-		return fmt.Errorf("repository not initialized")
-	}
 	if remoteName == "" || remoteBranch == "" {
 		return fmt.Errorf("remote or branch missing")
 	}
@@ -336,9 +319,6 @@ func scheduleUpstreamVerificationAndFetch(r *git.Repository, remoteName, remoteB
 
 // upstreamExistsOnRemoteWithContext is a context-aware version of upstreamExistsOnRemote.
 func upstreamExistsOnRemoteWithContext(ctx context.Context, r *git.Repository, remoteName, branchName string) (bool, error) {
-	if r == nil {
-		return false, fmt.Errorf("repository not initialized")
-	}
 	if remoteName == "" || branchName == "" {
 		return false, fmt.Errorf("remote or branch missing")
 	}
@@ -357,10 +337,6 @@ func upstreamExistsOnRemoteWithContext(ctx context.Context, r *git.Repository, r
 }
 
 func applySuccessState(r *git.Repository, outcome OperationOutcome) {
-	if r.State == nil {
-		return
-	}
-
 	// Reset recoverable flag on success paths, but preserve it for Refresh operations
 	// because Refresh only reloads metadata and doesn't verify if the error condition
 	// (e.g. network issue, missing upstream) is resolved. We'll handle verification
@@ -371,9 +347,7 @@ func applySuccessState(r *git.Repository, outcome OperationOutcome) {
 
 	message := strings.TrimSpace(outcome.Message)
 	prevMessage := ""
-	if r.State != nil {
-		prevMessage = r.State.Message
-	}
+	prevMessage = r.State.Message
 	statusChanged := false
 	notified := false
 
@@ -463,16 +437,12 @@ func applySuccessState(r *git.Repository, outcome OperationOutcome) {
 }
 
 func applyCleanliness(r *git.Repository) {
-	if r == nil || r.State == nil || r.State.Branch == nil {
-		return
-	}
-
 	// Run cleanliness evaluation asynchronously to avoid blocking the event queue
 	go applyCleanlinessAsync(r)
 }
 
 func applyCleanlinessAsync(r *git.Repository) {
-	if r == nil || r.State == nil || r.State.Branch == nil {
+	if r.State.Branch == nil {
 		return
 	}
 
@@ -593,9 +563,6 @@ func resolveUpstreamParts(r *git.Repository, branch *git.Branch) (string, string
 }
 
 func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error) {
-	if r == nil {
-		return false, fmt.Errorf("repository not initialized")
-	}
 	if mergeArg == "" {
 		return false, fmt.Errorf("upstream reference not set")
 	}
@@ -658,9 +625,6 @@ func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error)
 }
 
 func setRepositoryStatus(r *git.Repository, status git.WorkStatus, message string) {
-	if r == nil || r.State == nil {
-		return
-	}
 	prevStatus := r.WorkStatus()
 	prevMessage := strings.TrimSpace(r.State.Message)
 	trimmed := strings.TrimSpace(message)

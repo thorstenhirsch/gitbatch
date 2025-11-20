@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+var (
+	stashIDRegex     = regexp.MustCompile(`stash@{[\d]+}:`)
+	stashIDRegexInt  = regexp.MustCompile(`[\d]+`)
+	stashBranchRegex = regexp.MustCompile(`^(.*?): `)
+	stashMsgRegex    = regexp.MustCompile(`WIP on \(?([^)]*)\)?`)
+	stashHashRegex   = regexp.MustCompile(`[\w|\d]{7}\s`)
+)
+
 // StashedItem holds the required fields for a stashed change
 type StashedItem struct {
 	StashID     int
@@ -19,11 +27,6 @@ type StashedItem struct {
 func (r *Repository) loadStashedItems() error {
 	r.Stasheds = make([]*StashedItem, 0)
 	output := stashGet(r, "list")
-	stashIDRegex := regexp.MustCompile(`stash@{[\d]+}:`)
-	stashIDRegexInt := regexp.MustCompile(`[\d]+`)
-	stashBranchRegex := regexp.MustCompile(`^(.*?): `)
-	stashMsgRegex := regexp.MustCompile(`WIP on \(?([^)]*)\)?`)
-	stashHashRegex := regexp.MustCompile(`[\w|\d]{7}\s`)
 
 	stashlist := strings.Split(output, "\n")
 	for _, stashitem := range stashlist {

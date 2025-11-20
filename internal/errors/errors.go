@@ -1,7 +1,6 @@
 package errors
 
 import (
-	stdErrors "errors"
 	"fmt"
 	"strings"
 )
@@ -84,8 +83,6 @@ func (e GitError) Error() string {
 	return string(e)
 }
 
-<<<<<<< HEAD
-=======
 type exitCoder interface {
 	ExitCode() int
 }
@@ -149,7 +146,6 @@ func IsRecoverable(err error) bool {
 	return false
 }
 
->>>>>>> c75a2ae (rename dirty to disabled state, fix state re-evaluation)
 // ParseGitError takes git output as an input and tries to find some meaningful
 // errors can be used by the app
 func ParseGitError(out string, err error) error {
@@ -241,57 +237,4 @@ func ParseGitError(out string, err error) error {
 	}
 
 	return fmt.Errorf("%s", trimmed)
-}
-
-// IsRecoverable reports whether the provided git error represents a recoverable state.
-func IsRecoverable(err error) bool {
-	if err == nil {
-		return false
-	}
-	switch {
-	case stdErrors.Is(err, ErrRemoteBranchNotSpecified):
-		return true
-	case stdErrors.Is(err, ErrCouldNotFindRemoteRef):
-		return true
-	case stdErrors.Is(err, ErrReferenceBroken):
-		return true
-	}
-	lowered := strings.ToLower(strings.TrimSpace(err.Error()))
-	if lowered == "" {
-		return false
-	}
-	return strings.Contains(lowered, "upstream is gone")
-}
-
-// RequiresCredentials reports whether the provided error indicates that
-// authentication credentials are required to complete the operation.
-func RequiresCredentials(err error) bool {
-	if err == nil {
-		return false
-	}
-	if stdErrors.Is(err, ErrAuthenticationRequired) {
-		return true
-	}
-	if stdErrors.Is(err, ErrPermissionDenied) {
-		return true
-	}
-	if stdErrors.Is(err, ErrAuthorizationFailed) {
-		return true
-	}
-	lowered := strings.ToLower(strings.TrimSpace(err.Error()))
-	if lowered == "" {
-		return false
-	}
-	// Check for various authentication error patterns
-	return strings.Contains(lowered, "authentication required") ||
-		strings.Contains(lowered, "authentication failed") ||
-		strings.Contains(lowered, "permission denied") ||
-		strings.Contains(lowered, "authorization failed") ||
-		strings.Contains(lowered, "could not read username") ||
-		strings.Contains(lowered, "could not read password") ||
-		strings.Contains(lowered, "invalid username or password") ||
-		strings.Contains(lowered, "http basic: access denied") ||
-		strings.Contains(lowered, "fatal: authentication") ||
-		strings.Contains(lowered, "401") ||
-		strings.Contains(lowered, "403 forbidden")
 }

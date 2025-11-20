@@ -1,16 +1,21 @@
 package git
 
 import (
+	"io"
 	"regexp"
 	"time"
 
-	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// Commit is the lightweight version of go-git's Reference struct. it holds
-// hash of the commit, author's e-mail address, Message (subject and body
-// combined) commit date and commit type whether it is local commit or a remote
+// MaxCommits is the maximum number of commits to load for the UI
+const MaxCommits = 200
+
+// newlineRegex is the regex pattern to split the message into lines
+var newlineRegex = regexp.MustCompile(`\r?\n`)
+
+// Commit is the wrapper for "object.Commit" and holds the commit type
 type Commit struct {
 	Hash       string
 	Author     *Contributor
@@ -43,7 +48,7 @@ const (
 // loads the local commits by simply using git log way. ALso, gets the upstream
 // diff commits
 func (b *Branch) initCommits(r *Repository) error {
-	b.Commits = make([]*Commit, 0)
+	b.Commits = make([]*Commit, 0, MaxCommits)
 	ref := b.Reference
 
 	// git log first
@@ -62,8 +67,19 @@ func (b *Branch) initCommits(r *Repository) error {
 	// find commits that not pushed to upstream
 	lcs, _ := b.pushDiffsToUpstream(r)
 
-	// ... just iterates over the commits
-	err = cIter.ForEach(func(c *object.Commit) error {
+	// Iterate over commits with a limit
+	count := 0
+	for {
+		c, err := cIter.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if count >= MaxCommits {
+			break
+		}
 
 		cmType := EvenCommit
 		for _, lc := range lcs {
@@ -74,12 +90,10 @@ func (b *Branch) initCommits(r *Repository) error {
 
 		commit := commit(c, cmType)
 		b.Commits = append(b.Commits, commit)
-		return nil
-	})
-	if err != nil {
-		return err
+		count++
 	}
-	if b.State.Commit == nil {
+
+	if len(b.Commits) > 0 && b.State.Commit == nil {
 		b.State.Commit = b.Commits[0]
 	}
 	return nil
@@ -175,8 +189,7 @@ func (c *Commit) String() string {
 	d := "Hash:" + " " + c.Hash
 	d = d + "\n" + "Author:" + " " + c.Author.Name + " <" + c.Author.Email + ">"
 	d = d + "\n" + "Date:" + " " + c.Author.When.String() + "\n"
-	re := regexp.MustCompile(`\r?\n`)
-	s := re.Split(c.Message, -1)
+	s := newlineRegex.Split(c.Message, -1)
 	for _, l := range s {
 		d = d + "\n" + " " + l
 	}

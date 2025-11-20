@@ -42,5 +42,5 @@ func (r *Repository) initRemotes() error {
 		return fmt.Errorf("no remote for repository: %s", r.Name)
 	}
 	r.State.Remote = r.Remotes[0]
-	return err
+	return nil
 }

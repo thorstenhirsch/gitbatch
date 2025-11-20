@@ -9,14 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetDigest_BranchSwitch(t *testing.T) {
+func TestRefreshModTime_BranchSwitch(t *testing.T) {
 	th := InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	r := th.Repository
 
-	// Get initial digest
-	digest1 := r.GetDigest()
+	// Get initial modtime
+	modTime1 := r.RefreshModTime()
 
 	// Get current HEAD to know what to copy
 	headRef, err := r.Repo.Head()
@@ -24,11 +24,11 @@ func TestGetDigest_BranchSwitch(t *testing.T) {
 
 	currentBranchName := headRef.Name().Short()
 
-	// Create a new branch 'feature-digest-test' pointing to same commit
+	// Create a new branch 'feature-modtime-test' pointing to same commit
 	// We simulate this by copying the ref file
 	gitDir := filepath.Join(r.AbsPath, ".git")
 	currentRefPath := filepath.Join(gitDir, "refs", "heads", currentBranchName)
-	featureRefPath := filepath.Join(gitDir, "refs", "heads", "feature-digest-test")
+	featureRefPath := filepath.Join(gitDir, "refs", "heads", "feature-modtime-test")
 
 	// Read current ref
 	refContent, err := os.ReadFile(currentRefPath)
@@ -42,15 +42,12 @@ func TestGetDigest_BranchSwitch(t *testing.T) {
 	// This simulates an external tool (like lazygit) changing the branch
 	headPath := filepath.Join(gitDir, "HEAD")
 
-	newHeadContent := "ref: refs/heads/feature-digest-test\n"
+	newHeadContent := "ref: refs/heads/feature-modtime-test\n"
 	err = os.WriteFile(headPath, []byte(newHeadContent), 0644)
 	require.NoError(t, err)
 
-	// Get digest again
-	digest2 := r.GetDigest()
+	// Get modtime again
+	modTime2 := r.RefreshModTime()
 
-	assert.NotEqual(t, digest1, digest2, "Digest should change when HEAD symbolic ref changes")
-
-	// Verify that the digest contains the new HEAD content
-	assert.Contains(t, digest2, "ref: refs/heads/feature-digest-test")
+	assert.True(t, modTime2.After(modTime1), "ModTime should increase when HEAD symbolic ref changes")
 }

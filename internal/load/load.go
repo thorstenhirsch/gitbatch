@@ -39,6 +39,8 @@ func SyncLoad(directories []string) (entities []*git.Repository, err error) {
 					errors <- err
 					continue
 				}
+				// Initialize modtime
+				entity.RefreshModTime()
 				results <- entity
 			}
 		}()

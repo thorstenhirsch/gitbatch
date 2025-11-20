@@ -160,24 +160,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case lazygitClosedMsg:
 		repo := msg.repo
-		if repo != nil {
-			// Only re-evaluate if the repository state has changed
-			if repo.GetDigest() != msg.originalDigest {
-				if repo.State != nil {
-					repo.State.Message = "waiting"
-				}
-				repo.SetWorkStatus(git.Pending)
-				repo.NotifyRepositoryUpdated()
-				_ = command.ScheduleRepositoryRefresh(repo, nil)
-				m.jobsRunning = true
-				return m, tickCmd()
-			}
-			// No changes detected, restore status
-			if repo.State != nil {
-				*repo.State = msg.originalState
-			}
+		// Only re-evaluate if the repository state has changed
+		currentModTime := repo.RefreshModTime()
+		if currentModTime.After(msg.originalModTime) {
+			repo.State.Message = "waiting"
+			// Restore the recoverable error state so that EvaluateRepositoryState
+			// knows to trigger a probe if needed.
+			repo.State.RecoverableError = msg.originalState.RecoverableError
+
+			repo.SetWorkStatus(git.Pending)
 			repo.NotifyRepositoryUpdated()
+			_ = command.ScheduleRepositoryRefresh(repo, nil)
+			m.jobsRunning = true
+			return m, tickCmd()
 		}
+		// No changes detected, restore status
+		*repo.State = msg.originalState
+		repo.NotifyRepositoryUpdated()
+
 		if m.updateJobsRunningFlag() {
 			return m, tickCmd()
 		}
@@ -278,13 +278,15 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 
 				r.SetWorkStatus(git.Working)
-				digest := r.GetDigest()
+				// Ensure we have the latest modtime before starting lazygit
+				r.RefreshModTime()
+				originalModTime := r.ModTime
 
 				cmd := tea.ExecProcess(exec.Command("lazygit", "-p", r.AbsPath), func(err error) tea.Msg {
 					if err != nil {
 						return errMsg{err: err}
 					}
-					return lazygitClosedMsg{repo: r, originalDigest: digest, originalState: savedState}
+					return lazygitClosedMsg{repo: r, originalModTime: originalModTime, originalState: savedState}
 				})
 				if m.updateJobsRunningFlag() {
 					return m, tea.Batch(cmd, tickCmd())

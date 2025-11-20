@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
@@ -331,9 +333,9 @@ func (e errMsg) Error() string { return e.err.Error() }
 
 // lazygitClosedMsg is sent when lazygit exits
 type lazygitClosedMsg struct {
-	repo           *git.Repository
-	originalDigest string
-	originalState  git.RepositoryState
+	repo            *git.Repository
+	originalModTime time.Time
+	originalState   git.RepositoryState
 }
 
 // jobCompletedMsg is sent when a job completes (success or failure)

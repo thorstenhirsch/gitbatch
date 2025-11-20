@@ -63,8 +63,17 @@ func (j *Job) Start() error {
 		j.Repository.State.Message = "fetching.."
 		var opts *command.FetchOptions
 		if j.Options != nil {
-			opts = j.Options.(*command.FetchOptions)
-		} else {
+			if o, ok := j.Options.(*command.FetchOptions); ok {
+				opts = o
+			} else {
+				// Fallback or error handling if needed, but for now just ignore invalid options
+				// or maybe log it? The original code would panic.
+				// Let's assume if it's not the right type, we treat it as nil options
+				// but maybe we should log it.
+				// For safety, let's just proceed with defaults if cast fails.
+			}
+		}
+		if opts == nil {
 			remoteName := "origin"
 			if j.Repository.State.Remote != nil && j.Repository.State.Remote.Name != "" {
 				remoteName = j.Repository.State.Remote.Name
@@ -228,8 +237,11 @@ func (j *Job) Start() error {
 		}
 		var opts *command.PullOptions
 		if j.Options != nil {
-			opts = j.Options.(*command.PullOptions)
-		} else {
+			if o, ok := j.Options.(*command.PullOptions); ok {
+				opts = o
+			}
+		}
+		if opts == nil {
 			opts = &command.PullOptions{}
 		}
 		opts = ensurePullOptions(opts, j.Repository, false, true)

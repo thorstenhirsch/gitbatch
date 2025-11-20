@@ -10,6 +10,7 @@ import (
 // Queue holds the slice of Jobs
 type Queue struct {
 	series []*Job
+	mu     sync.Mutex
 }
 
 // CreateJobQueue creates a jobqueue struct and initialize its slice then return
@@ -23,6 +24,9 @@ func CreateJobQueue() (jq *Queue) {
 
 // AddJob adds a job to the queue
 func (jq *Queue) AddJob(j *Job) error {
+	jq.mu.Lock()
+	defer jq.mu.Unlock()
+
 	for _, job := range jq.series {
 		if job.Repository.RepoID == j.Repository.RepoID && job.JobType == j.JobType {
 			return fmt.Errorf("same job already is in the queue")
@@ -36,6 +40,9 @@ func (jq *Queue) AddJob(j *Job) error {
 
 // StartNext starts the next job in the queue
 func (jq *Queue) StartNext() (j *Job, finished bool, err error) {
+	jq.mu.Lock()
+	defer jq.mu.Unlock()
+
 	finished = false
 	if len(jq.series) < 1 {
 		finished = true
@@ -51,8 +58,10 @@ func (jq *Queue) StartNext() (j *Job, finished bool, err error) {
 }
 
 // RemoveFromQueue deletes the given entity and its job from the queue
-// TODO: it is not safe if the job has been started
 func (jq *Queue) RemoveFromQueue(r *git.Repository) error {
+	jq.mu.Lock()
+	defer jq.mu.Unlock()
+
 	removed := false
 	for i, job := range jq.series {
 		if job.Repository.RepoID == r.RepoID {
@@ -70,6 +79,9 @@ func (jq *Queue) RemoveFromQueue(r *git.Repository) error {
 // struct, this function returns true if that entity is in the queue along with
 // the jobs type
 func (jq *Queue) IsInTheQueue(r *git.Repository) (inTheQueue bool, j *Job) {
+	jq.mu.Lock()
+	defer jq.mu.Unlock()
+
 	inTheQueue = false
 	for _, job := range jq.series {
 		if job.Repository.RepoID == r.RepoID {
@@ -84,16 +96,19 @@ func (jq *Queue) IsInTheQueue(r *git.Repository) (inTheQueue bool, j *Job) {
 // Concurrency is limited by the git queue semaphore in internal/git/repository.go,
 // which caps concurrent git operations globally across all repositories.
 func (jq *Queue) StartJobsAsync() map[*Job]error {
+	jq.mu.Lock()
 	if len(jq.series) == 0 {
+		jq.mu.Unlock()
 		return make(map[*Job]error)
 	}
+	jobCount := len(jq.series)
+	jq.mu.Unlock()
 
 	fails := make(map[*Job]error)
 	var mx sync.Mutex
 	var wg sync.WaitGroup
 
 	// Start all jobs; git queue will handle concurrency limiting
-	jobCount := len(jq.series)
 	for i := 0; i < jobCount; i++ {
 		wg.Add(1)
 		go func() {

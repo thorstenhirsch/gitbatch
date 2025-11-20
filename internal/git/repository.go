@@ -35,7 +35,7 @@ type Repository struct {
 	Stasheds []*StashedItem
 	State    *RepositoryState
 
-	mutex     *sync.RWMutex
+	mutex     sync.RWMutex
 	listeners map[string][]RepositoryListener
 	queues    map[eventQueueType]*eventQueue
 }
@@ -196,7 +196,6 @@ func FastInitializeRepo(dir string) (r *Repository, err error) {
 			Message:          "waiting",
 			RecoverableError: false,
 		},
-		mutex:     &sync.RWMutex{},
 		listeners: make(map[string][]RepositoryListener),
 	}
 	r.initEventQueues()
@@ -341,7 +340,7 @@ func (r *Repository) Publish(eventName string, data interface{}) error {
 }
 
 func (r *Repository) listenersFor(eventName string) []RepositoryListener {
-	if r == nil || r.mutex == nil {
+	if r == nil {
 		return nil
 	}
 	r.mutex.RLock()
@@ -511,32 +510,24 @@ func Create(dir string) (*Repository, error) {
 	return InitializeRepo(dir)
 }
 
-// GetDigest returns a string representing the current state of the repository.
-// It includes the HEAD hash and modification times of critical git files.
-// This is used to detect if the repository state has changed (e.g. by external tools).
-func (r *Repository) GetDigest() string {
-	head, err := r.Repo.Head()
-	headHash := ""
-	if err == nil {
-		headHash = head.Hash().String()
-	}
+// RefreshModTime updates the repository's modification time by checking critical git files.
+// It returns the latest modification time found.
+func (r *Repository) RefreshModTime() time.Time {
+	latest := r.ModTime
 
-	// Helper to get modtime
-	getModTime := func(path string) string {
+	checkPath := func(path string) {
 		info, err := os.Stat(filepath.Join(r.AbsPath, ".git", path))
-		if err != nil {
-			return ""
+		if err == nil && info.ModTime().After(latest) {
+			latest = info.ModTime()
 		}
-		return info.ModTime().Format(time.RFC3339Nano)
 	}
 
-	indexMod := getModTime("index")
-	fetchHeadMod := getModTime("FETCH_HEAD")
-	headMod := getModTime("HEAD")
+	// Check critical git files that indicate state changes
+	checkPath("HEAD")
+	checkPath("index")
+	checkPath("FETCH_HEAD")
+	checkPath("refs/heads/" + r.State.Branch.Name)
 
-	// Read HEAD content directly to detect symbolic ref changes even if hash is same
-	// and modtime resolution is insufficient or missed.
-	headContent, _ := os.ReadFile(filepath.Join(r.AbsPath, ".git", "HEAD"))
-
-	return fmt.Sprintf("%s|%s|%s|%s|%s", headHash, indexMod, fetchHeadMod, headMod, string(headContent))
+	r.ModTime = latest
+	return latest
 }
