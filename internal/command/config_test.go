@@ -5,10 +5,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
+	"github.com/thorstenhirsch/gitbatch/internal/gittest"
 )
 
 func TestConfigWithGit(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	testConfigopt := &ConfigOptions{

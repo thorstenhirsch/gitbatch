@@ -10,10 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/thorstenhirsch/gitbatch/internal/command"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
+	"github.com/thorstenhirsch/gitbatch/internal/gittest"
 )
 
 func TestStart(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	mockJob1 := &Job{
@@ -56,7 +57,7 @@ func TestStart(t *testing.T) {
 }
 
 func TestFetchJobPreservesRecoverableState(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository

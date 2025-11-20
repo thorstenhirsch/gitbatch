@@ -55,7 +55,8 @@ func (r *Repository) initBranches() error {
 	var push, pull string
 
 	// Check cleanliness once for the repository, not for every branch
-	isRepoClean := r.isClean()
+	status, err := r.GetWorkTreeStatus()
+	isRepoClean := err == nil && status.Clean
 
 	_ = bs.ForEach(func(b *plumbing.Reference) error {
 		if b.Type() != plumbing.HashReference {
@@ -138,32 +139,6 @@ func (r *Repository) Checkout(b *Branch) error {
 		return err
 	}
 	return r.Publish(RepositoryUpdated, nil)
-}
-
-// checking the branch if it has any changes from its head revision. Initially
-// I implemented this with go-git but it was incredibly slow and there is also
-// an issue about it: https://github.com/src-d/go-git/issues/844
-func (r *Repository) isClean() bool {
-	args := []string{"status"}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = r.AbsPath
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return false
-	}
-	s := string(out)
-	s = strings.TrimSuffix(s, "\n")
-	if len(s) >= 0 {
-		vs := strings.Split(s, "\n")
-		line := vs[len(vs)-1]
-		// earlier versions of git returns "working directory clean" instead of
-		//"working tree clean" message
-		if strings.Contains(line, "working tree clean") ||
-			strings.Contains(line, "working directory clean") {
-			return true
-		}
-	}
-	return false
 }
 
 // RevListOptions defines the rules of rev-list func
@@ -381,16 +356,6 @@ func (r *Repository) GetWorkTreeStatus() (WorkTreeStatus, error) {
 	}
 
 	return WorkTreeStatus{Clean: false, HasConflicts: hasConflicts}, nil
-}
-
-// IsClean checks if the working tree is clean according to git status.
-// Deprecated: Use GetWorkTreeStatus instead.
-func (r *Repository) IsClean() bool {
-	status, err := r.GetWorkTreeStatus()
-	if err != nil {
-		return false
-	}
-	return status.Clean
 }
 
 func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {

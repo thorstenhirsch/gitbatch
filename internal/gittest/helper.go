@@ -1,0 +1,77 @@
+package gittest
+
+import (
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/stretchr/testify/require"
+	"github.com/thorstenhirsch/gitbatch/internal/git"
+	"github.com/thorstenhirsch/gitbatch/internal/testlib"
+)
+
+type TestHelper struct {
+	Repository *git.Repository
+	RepoPath   string
+}
+
+func InitTestRepositoryFromLocal(t *testing.T) *TestHelper {
+	testPathDir, err := ioutil.TempDir("", "gitbatch")
+	require.NoError(t, err)
+
+	p, err := testlib.ExtractTestRepository(testPathDir)
+	require.NoError(t, err)
+
+	r, err := git.InitializeRepo(p)
+	require.NoError(t, err)
+
+	return &TestHelper{
+		Repository: r,
+		RepoPath:   p,
+	}
+}
+
+func InitTestRepository(t *testing.T) *TestHelper {
+	testRepoDir, err := ioutil.TempDir("", "test-data")
+	require.NoError(t, err)
+
+	testRepoURL := "https://gitlab.com/isacikgoz/test-data.git"
+	_, err = gogit.PlainClone(testRepoDir, false, &gogit.CloneOptions{
+		URL:               testRepoURL,
+		RecurseSubmodules: gogit.DefaultSubmoduleRecursionDepth,
+	})
+
+	time.Sleep(time.Second)
+	if err != nil && err != gogit.NoErrAlreadyUpToDate {
+		require.FailNow(t, err.Error())
+		return nil
+	}
+
+	r, err := git.InitializeRepo(testRepoDir)
+	require.NoError(t, err)
+
+	return &TestHelper{
+		Repository: r,
+		RepoPath:   testRepoDir,
+	}
+}
+
+func (h *TestHelper) CleanUp(t *testing.T) {
+	err := os.RemoveAll(filepath.Dir(h.RepoPath))
+	require.NoError(t, err)
+}
+
+func (h *TestHelper) DirtyRepoPath() string {
+	return filepath.Join(h.RepoPath, "dirty-repo")
+}
+
+func (h *TestHelper) BasicRepoPath() string {
+	return filepath.Join(h.RepoPath, "basic-repo")
+}
+
+func (h *TestHelper) NonRepoPath() string {
+	return filepath.Join(h.RepoPath, "non-repo")
+}

@@ -11,13 +11,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
+	"github.com/thorstenhirsch/gitbatch/internal/gittest"
 )
 
 // TestApplyCleanliness_CleanWorkingTree_NoIncomingCommits tests the scenario where
 // the working tree is clean and there are no incoming commits from upstream.
 // Expected: Repository should be marked as clean.
 func TestApplyCleanliness_CleanWorkingTree_NoIncomingCommits(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -26,7 +27,9 @@ func TestApplyCleanliness_CleanWorkingTree_NoIncomingCommits(t *testing.T) {
 
 	// Ensure working tree is clean
 	require.NoError(t, ScheduleRepositoryRefresh(repo, nil))
-	require.True(t, repo.IsClean(), "working tree should be clean")
+	status, err := repo.GetWorkTreeStatus()
+	require.NoError(t, err)
+	require.True(t, status.Clean, "working tree should be clean")
 
 	// Ensure no incoming commits (already up-to-date)
 	require.False(t, repo.State.Branch.HasIncomingCommits(), "should have no incoming commits")
@@ -44,7 +47,7 @@ func TestApplyCleanliness_CleanWorkingTree_NoIncomingCommits(t *testing.T) {
 // the working tree is clean but there are incoming commits from upstream.
 // Expected: Repository should be marked as clean (no local changes means no conflicts).
 func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -104,7 +107,9 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
 
 	// Verify setup: clean working tree with incoming commits
-	require.True(t, repo.IsClean(), "working tree should be clean")
+	status, err := repo.GetWorkTreeStatus()
+	require.NoError(t, err)
+	require.True(t, status.Clean, "working tree should be clean")
 	require.True(t, repo.State.Branch.HasIncomingCommits(), "should have incoming commits")
 
 	// Apply cleanliness check
@@ -120,7 +125,7 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 // the working tree has uncommitted changes but there are no incoming commits.
 // Expected: Repository should be marked as clean (up-to-date with upstream).
 func TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -133,7 +138,9 @@ func TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits(t *testing.T) {
 	require.NoError(t, repo.Refresh())
 
 	// Verify setup: unclean working tree, no incoming commits
-	require.False(t, repo.IsClean(), "working tree should not be clean")
+	status, err := repo.GetWorkTreeStatus()
+	require.NoError(t, err)
+	require.False(t, status.Clean, "working tree should not be clean")
 	require.False(t, repo.State.Branch.HasIncomingCommits(), "should have no incoming commits")
 
 	// Apply cleanliness check
@@ -150,7 +157,7 @@ func TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits(t *testing.T) {
 // would succeed (meaning local changes don't conflict with incoming changes).
 // Expected: Repository should be marked as clean.
 func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -212,7 +219,9 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
 
 	// Verify setup: unclean working tree with incoming commits
-	require.False(t, repo.IsClean(), "working tree should not be clean")
+	status, err := repo.GetWorkTreeStatus()
+	require.NoError(t, err)
+	require.False(t, status.Clean, "working tree should not be clean")
 	require.True(t, repo.State.Branch.HasIncomingCommits(), "should have incoming commits")
 
 	// Apply cleanliness check
@@ -229,7 +238,7 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 // would fail due to actual merge conflicts.
 // Expected: Repository should be marked as disabled.
 func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -298,7 +307,9 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *
 	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
 
 	// Verify setup: unclean working tree with incoming commits
-	require.False(t, repo.IsClean(), "working tree should not be clean")
+	status, err := repo.GetWorkTreeStatus()
+	require.NoError(t, err)
+	require.False(t, status.Clean, "working tree should not be clean")
 	require.True(t, repo.State.Branch.HasIncomingCommits(), "should have incoming commits")
 
 	// Apply cleanliness check
@@ -313,7 +324,7 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict(t *
 // TestFastForwardDryRunSucceeds_NoError tests the happy path where
 // fast-forward merge would succeed without any issues.
 func TestFastForwardDryRunSucceeds_NoError(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -372,7 +383,7 @@ func TestFastForwardDryRunSucceeds_NoError(t *testing.T) {
 // git merge --dry-run fails with "would be overwritten by merge" error.
 // This should be treated as success (fast-forward would work, just blocked by local changes).
 func TestFastForwardDryRunSucceeds_WouldBeOverwritten(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -494,7 +505,7 @@ func TestIsGitFatalError(t *testing.T) {
 // TestApplyCleanliness_UpstreamNotConfigured tests the error case where
 // upstream is not configured.
 func TestApplyCleanliness_UpstreamNotConfigured(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	repo := th.Repository
@@ -592,13 +603,16 @@ func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 	require.NotNil(t, repo.State.Branch)
 
 	// Debug output
-	t.Logf("IsClean: %v", repo.IsClean())
+	status, _ := repo.GetWorkTreeStatus()
+	t.Logf("IsClean: %v", status.Clean)
 	t.Logf("Upstream: %+v", repo.State.Branch.Upstream)
 	t.Logf("Pullables: %s", repo.State.Branch.Pullables)
 	t.Logf("Pushables: %s", repo.State.Branch.Pushables)
 
 	// Verify test setup
-	require.False(t, repo.IsClean(), "working tree should not be clean (uncommitted file3.txt)")
+	status, err = repo.GetWorkTreeStatus()
+	require.NoError(t, err)
+	require.False(t, status.Clean, "working tree should not be clean (uncommitted file3.txt)")
 	require.True(t, repo.State.Branch.HasIncomingCommits(), "should have incoming commits (file2.txt from remote)")
 
 	// Verify fast-forward would succeed

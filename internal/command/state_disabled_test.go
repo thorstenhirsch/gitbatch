@@ -87,14 +87,16 @@ func TestDisabledState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails(t *te
 	require.NotNil(t, repo.State.Branch, "repo.State.Branch should not be nil")
 
 	// Log diagnostic information
-	t.Logf("IsClean: %v", repo.IsClean())
+	status, err := repo.GetWorkTreeStatus()
+	require.NoError(t, err)
+	t.Logf("IsClean: %v", status.Clean)
 	t.Logf("Branch: %s", repo.State.Branch.Name)
 	t.Logf("Upstream: %+v", repo.State.Branch.Upstream)
 	t.Logf("Pullables: %s", repo.State.Branch.Pullables)
 	t.Logf("HasIncomingCommits: %v", repo.State.Branch.HasIncomingCommits())
 
 	// Verify preconditions
-	require.False(t, repo.IsClean(), "working tree should not be clean (uncommitted changes)")
+	require.False(t, status.Clean, "working tree should not be clean (uncommitted changes)")
 	require.NotNil(t, repo.State.Branch.Upstream, "upstream should be configured")
 	require.True(t, repo.State.Branch.HasIncomingCommits(), "should have incoming commits from remote")
 

@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/thorstenhirsch/gitbatch/internal/git"
+	"github.com/thorstenhirsch/gitbatch/internal/gittest"
 )
 
 func TestPush(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	tempDir, err := os.MkdirTemp("", "gitbatch-remote")

@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/thorstenhirsch/gitbatch/internal/git"
+	"github.com/thorstenhirsch/gitbatch/internal/gittest"
 )
 
 func TestGenerateDirectories(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	var tests = []struct {
@@ -27,7 +27,7 @@ func TestGenerateDirectories(t *testing.T) {
 }
 
 func TestWalkRecursive(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	var tests = []struct {
@@ -51,7 +51,7 @@ func TestWalkRecursive(t *testing.T) {
 }
 
 func TestSeparateDirectories(t *testing.T) {
-	th := git.InitTestRepositoryFromLocal(t)
+	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
 	var tests = []struct {
