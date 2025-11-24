@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -549,7 +548,6 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	status := r.WorkStatus()
 	dirty := repoIsDirty(r)
 	failed := status == git.Fail
-	recoverable := failed && r.State != nil && r.State.RecoverableError
 	requiresCredentials := failed && r.State != nil && r.State.RequiresCredentials
 
 	switch status {
@@ -574,8 +572,6 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		if requiresCredentials {
 			// Requires credentials gets pink styling
 			style = m.styles.CredentialsItem
-		} else if recoverable {
-			style = m.styles.RecoverableFailedItem
 		} else {
 			style = m.styles.FailedItem
 		}
@@ -639,8 +635,6 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		switch {
 		case requiresCredentials:
 			highlight = m.styles.CredentialsSelectedItem
-		case recoverable:
-			highlight = m.styles.RecoverableFailedSelectedItem
 		case failed:
 			highlight = m.styles.FailedSelectedItem
 		case dirty:
@@ -1400,7 +1394,6 @@ func (m *Model) renderStatusBar() string {
 	focusRepo := m.currentRepository()
 	dirty := repoIsDirty(focusRepo)
 	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
-	recoverable := failed && focusRepo.State != nil && focusRepo.State.RecoverableError
 	requiresCredentials := failed && focusRepo.State != nil && focusRepo.State.RequiresCredentials
 
 	center := ""
@@ -1423,98 +1416,61 @@ func (m *Model) renderStatusBar() string {
 		}
 	}
 
-	if center == "" && m.activeCredentialPrompt != nil {
-		statusBarStyle = m.styles.StatusBarMerge
-		repoName := "credentials"
-		if m.activeCredentialPrompt.repo != nil {
-			repoName = truncateString(m.activeCredentialPrompt.repo.Name, 20)
+	if failed {
+		hasMessage := focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != ""
+		message := "Operation failed"
+		if hasMessage {
+			message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
 		}
-		left = fmt.Sprintf(" auth required: %s", repoName)
-
-		label := "Username"
-		display := m.credentialInputBuffer
-		if m.credentialInputField == credentialFieldPassword {
-			label = "Password"
-			display = strings.Repeat("*", utf8.RuneCountInString(m.credentialInputBuffer))
-		}
-
-		right = "enter: submit"
-		maxCenter := totalWidth - lipgloss.Width(left) - lipgloss.Width(right) - 2
-		if maxCenter < 0 {
-			maxCenter = 0
-		}
-		center = truncateString(fmt.Sprintf("%s: %s", label, display), maxCenter)
-	} else {
-		if failed {
-			hasMessage := focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != ""
-			message := "Operation failed"
+		if requiresCredentials {
+			statusBarStyle = m.styles.StatusBarCredentials
+			left = " credentials required"
+			right = "enter: provide | TAB: lazygit"
 			if hasMessage {
-				message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
+				right = "enter: provide | c: clear | TAB: lazygit"
 			}
-			if requiresCredentials {
-				statusBarStyle = m.styles.StatusBarCredentials
-				left = " credentials required"
-				right = "enter: provide | TAB: lazygit"
-				if hasMessage {
-					right = "enter: provide | c: clear | TAB: lazygit"
-				}
-				rightWidth = lipgloss.Width(right)
-				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
-				if maxCenter < 0 {
-					maxCenter = 0
-				}
-				center = truncateString(message, maxCenter)
-			} else if recoverable {
-				statusBarStyle = m.styles.StatusBarRecoverable
-				left = " repo needs attention"
-				if hasMessage {
-					right = "c: clear | TAB: lazygit"
-				} else {
-					right = "TAB: lazygit | ? for help"
-				}
-				rightWidth = lipgloss.Width(right)
-				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
-				if maxCenter < 0 {
-					maxCenter = 0
-				}
-				center = truncateString(message, maxCenter)
-			} else {
-				statusBarStyle = m.styles.StatusBarError
-				left = " repo failed"
-				if hasMessage {
-					right = "c: clear | TAB: lazygit"
-				} else {
-					right = "TAB: lazygit | ? for help"
-				}
-				rightWidth = lipgloss.Width(right)
-				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
-				if maxCenter < 0 {
-					maxCenter = 0
-				}
-				center = truncateString(message, maxCenter)
-			}
-		} else if dirty {
-			statusBarStyle = m.styles.StatusBarDisabled
-			left = " repo disabled"
-			center = "Only TAB (lazygit) permitted while working tree is disabled"
-			right = "TAB: lazygit"
-		} else if m.err != nil {
-			statusBarStyle = m.styles.StatusBarPush
-			maxCenter := totalWidth - leftWidth - rightWidth - 2
+			rightWidth = lipgloss.Width(right)
+			maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
 			if maxCenter < 0 {
 				maxCenter = 0
 			}
-			center = truncateString(formatErrorForDisplay(m.err), maxCenter)
+			center = truncateString(message, maxCenter)
+		} else {
+			statusBarStyle = m.styles.StatusBarError
+			left = " repo failed"
+			if hasMessage {
+				right = "c: clear | TAB: lazygit"
+			} else {
+				right = "TAB: lazygit | ? for help"
+			}
+			rightWidth = lipgloss.Width(right)
+			maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+			if maxCenter < 0 {
+				maxCenter = 0
+			}
+			center = truncateString(message, maxCenter)
 		}
-		if m.activeForcePrompt != nil && m.activeForcePrompt.repo != nil {
-			statusBarStyle = m.styles.StatusBarPush
-			repoName := truncateString(m.activeForcePrompt.repo.Name, 20)
-			left = fmt.Sprintf(" %s %s push failed", pushSymbol, repoName)
-			center = "Retry push with --force?"
-			right = "return: confirm | esc: cancel"
-		} else if !failed && !dirty && m.err == nil {
-			center = fmt.Sprintf("%s", center)
+	} else if dirty {
+		statusBarStyle = m.styles.StatusBarDisabled
+		left = " repo disabled"
+		center = "Only TAB (lazygit) permitted while working tree is disabled"
+		right = "TAB: lazygit"
+	} else if m.err != nil {
+		statusBarStyle = m.styles.StatusBarPush
+		maxCenter := totalWidth - leftWidth - rightWidth - 2
+		if maxCenter < 0 {
+			maxCenter = 0
 		}
+		center = truncateString(formatErrorForDisplay(m.err), maxCenter)
+	}
+	if m.activeForcePrompt != nil && m.activeForcePrompt.repo != nil {
+		statusBarStyle = m.styles.StatusBarPush
+		repoName := truncateString(m.activeForcePrompt.repo.Name, 20)
+		left = fmt.Sprintf(" %s %s push failed", pushSymbol, repoName)
+		center = "Retry push with --force?"
+		right = "return: confirm | esc: cancel"
+	} else if !failed && !dirty && m.err == nil {
+		center = fmt.Sprintf("%s", center)
 	}
 
 	if m.currentView != OverviewView && m.activeCredentialPrompt == nil && m.activeForcePrompt == nil {
@@ -1580,6 +1536,21 @@ func (m *Model) renderCredentialPrompt() string {
 	if prompt.repo != nil && prompt.repo.Name != "" {
 		repoName = prompt.repo.Name
 	}
+	server := ""
+	if prompt.repo != nil && prompt.repo.State != nil && prompt.repo.State.Remote != nil && len(prompt.repo.State.Remote.URL) > 0 {
+		server = prompt.repo.State.Remote.URL[0]
+		server = strings.TrimPrefix(server, "https://")
+		server = strings.TrimPrefix(server, "http://")
+		server = strings.TrimPrefix(server, "ssh://")
+		server = strings.TrimPrefix(server, "git@")
+		if idx := strings.Index(server, "/"); idx != -1 {
+			server = server[:idx]
+		}
+		if idx := strings.Index(server, ":"); idx != -1 {
+			server = server[:idx]
+		}
+	}
+
 	panelWidth := m.width
 	if panelWidth < 24 {
 		panelWidth = 24
@@ -1606,12 +1577,17 @@ func (m *Model) renderCredentialPrompt() string {
 	}
 	lines := []string{
 		fmt.Sprintf("Credentials required for %s", truncateString(repoName, contentWidth)),
+	}
+	if server != "" {
+		lines = append(lines, fmt.Sprintf("Server: %s", truncateString(server, contentWidth)))
+	}
+	lines = append(lines,
 		"",
 		fmt.Sprintf("%s Username: %s", usernameIndicator, truncateString(usernameDisplay, contentWidth-11)),
 		fmt.Sprintf("%s Password: %s", passwordIndicator, truncateString(passwordDisplay, contentWidth-11)),
 		"",
-		"enter: submit | tab: switch field | esc: cancel",
-	}
+		"enter: submit | esc: cancel",
+	)
 	content := strings.Join(lines, "\n")
 	return m.styles.Panel.Width(panelWidth).Render(content)
 }

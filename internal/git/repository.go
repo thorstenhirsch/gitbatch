@@ -46,7 +46,6 @@ type RepositoryState struct {
 	Branch              *Branch
 	Remote              *Remote
 	Message             string
-	RecoverableError    bool
 	RequiresCredentials bool
 }
 
@@ -192,9 +191,8 @@ func FastInitializeRepo(dir string) (r *Repository, err error) {
 		ModTime: fstat.ModTime(),
 		Repo:    *rp,
 		State: &RepositoryState{
-			workStatus:       Pending,
-			Message:          "waiting",
-			RecoverableError: false,
+			workStatus: Pending,
+			Message:    "waiting",
 		},
 		listeners: make(map[string][]RepositoryListener),
 	}
@@ -468,9 +466,6 @@ func (r *Repository) setWorkStatus(ws WorkStatus, notify bool) {
 	}
 	prev := r.State.workStatus
 	r.State.workStatus = ws
-	if ws != Fail {
-		r.State.RecoverableError = false
-	}
 	if prev == ws {
 		return
 	}
@@ -485,12 +480,6 @@ func (r *Repository) NotifyRepositoryUpdated() {
 		return
 	}
 	_ = r.Publish(RepositoryUpdated, nil)
-}
-
-// MarkFailure is preserved for backward compatibility. Prefer using
-// MarkCriticalError or MarkRecoverableError for clarity.
-func (r *Repository) MarkFailure(message string, recoverable bool) {
-	r.markErrorState(message, recoverable)
 }
 
 func (r *Repository) String() string {

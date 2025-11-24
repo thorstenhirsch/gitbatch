@@ -39,8 +39,7 @@ func TestDebugFetchJob(t *testing.T) {
 
 	require.NoError(t, command.ScheduleRepositoryRefresh(repo, nil))
 	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
-	require.NotNil(t, repo.State.Branch.Upstream)
-	require.Nil(t, repo.State.Branch.Upstream.Reference)
+	require.Nil(t, repo.State.Branch.Upstream)
 
 	job := &Job{JobType: FetchJob, Repository: repo}
 	require.NoError(t, job.Start())
@@ -57,5 +56,5 @@ func TestDebugFetchJob(t *testing.T) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	elapsed := 5*time.Second - time.Until(deadline)
-	t.Logf("status=%v recoverable=%v message=%s elapsed=%s", repo.WorkStatus(), repo.State.RecoverableError, repo.State.Message, elapsed)
+	t.Logf("status=%v message=%s elapsed=%s", repo.WorkStatus(), repo.State.Message, elapsed)
 }

@@ -85,17 +85,15 @@ func (j *Job) Start() error {
 		}
 		if branch := j.Repository.State.Branch; branch != nil && branch.Upstream != nil {
 			if branch.Upstream.Reference == nil {
-				recoverable := true
 				upstreamName := strings.TrimSpace(branch.Upstream.Name)
 				msg := "upstream missing on remote"
 				if upstreamName != "" {
 					msg = fmt.Sprintf("upstream %s missing on remote", upstreamName)
 				}
 				command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-					Operation:           command.OperationFetch,
-					Err:                 errors.New(msg),
-					Message:             msg,
-					RecoverableOverride: &recoverable,
+					Operation: command.OperationFetch,
+					Err:       errors.New(msg),
+					Message:   msg,
 				})
 				return nil
 			}
@@ -141,24 +139,20 @@ func (j *Job) Start() error {
 			opts = &command.PullOptions{}
 		}
 		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
-			recoverable := true
 			msg := "upstream not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation:           command.OperationPull,
-				Err:                 errors.New(msg),
-				Message:             msg,
-				RecoverableOverride: &recoverable,
+				Operation: command.OperationPull,
+				Err:       errors.New(msg),
+				Message:   msg,
 			})
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
-			recoverable := false
 			msg := "remote not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation:           command.OperationPull,
-				Err:                 errors.New(msg),
-				Message:             msg,
-				RecoverableOverride: &recoverable,
+				Operation: command.OperationPull,
+				Err:       errors.New(msg),
+				Message:   msg,
 			})
 			return nil
 		}
@@ -184,13 +178,11 @@ func (j *Job) Start() error {
 	case MergeJob:
 		j.Repository.State.Message = "merging.."
 		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
-			recoverable := true
 			msg := "upstream not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation:           command.OperationMerge,
-				Err:                 errors.New(msg),
-				Message:             msg,
-				RecoverableOverride: &recoverable,
+				Operation: command.OperationMerge,
+				Err:       errors.New(msg),
+				Message:   msg,
 			})
 			return nil
 		}
@@ -214,24 +206,20 @@ func (j *Job) Start() error {
 	case RebaseJob:
 		j.Repository.State.Message = "rebasing.."
 		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
-			recoverable := true
 			msg := "upstream not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation:           command.OperationRebase,
-				Err:                 errors.New(msg),
-				Message:             msg,
-				RecoverableOverride: &recoverable,
+				Operation: command.OperationRebase,
+				Err:       errors.New(msg),
+				Message:   msg,
 			})
 			return nil
 		}
 		if j.Repository.State.Remote == nil {
-			recoverable := false
 			msg := "remote not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation:           command.OperationRebase,
-				Err:                 errors.New(msg),
-				Message:             msg,
-				RecoverableOverride: &recoverable,
+				Operation: command.OperationRebase,
+				Err:       errors.New(msg),
+				Message:   msg,
 			})
 			return nil
 		}
@@ -265,24 +253,20 @@ func (j *Job) Start() error {
 	case PushJob:
 		j.Repository.State.Message = "pushing.."
 		if j.Repository.State == nil || j.Repository.State.Remote == nil {
-			recoverable := false
 			msg := "remote not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation:           command.OperationPush,
-				Err:                 errors.New(msg),
-				Message:             msg,
-				RecoverableOverride: &recoverable,
+				Operation: command.OperationPush,
+				Err:       errors.New(msg),
+				Message:   msg,
 			})
 			return nil
 		}
 		if j.Repository.State.Branch == nil {
-			recoverable := false
 			msg := "branch not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
-				Operation:           command.OperationPush,
-				Err:                 errors.New(msg),
-				Message:             msg,
-				RecoverableOverride: &recoverable,
+				Operation: command.OperationPush,
+				Err:       errors.New(msg),
+				Message:   msg,
 			})
 			return nil
 		}

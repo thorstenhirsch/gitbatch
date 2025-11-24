@@ -32,18 +32,15 @@ const (
 
 // OperationOutcome captures the result of an operation for state evaluation.
 type OperationOutcome struct {
-	Operation           OperationType
-	Err                 error
-	Message             string
-	SuppressSuccess     bool
-	RecoverableOverride *bool
+	Operation       OperationType
+	Err             error
+	Message         string
+	SuppressSuccess bool
 }
 
 // isGitFatalError checks if an error is a git fatal error (exit code 128).
 // These errors indicate serious problems like network failures, permission issues,
-// or repository corruption. Note: This function is used to determine if fetch
-// errors should be treated as critical vs recoverable, but specific error types
-// are now classified more precisely in the errors package.
+// or repository corruption.
 func isGitFatalError(err error) bool {
 	if err == nil {
 		return false
@@ -101,32 +98,18 @@ func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
 			return
 		}
 
-		recoverable := false
-		if outcome.RecoverableOverride != nil {
-			recoverable = *outcome.RecoverableOverride
-		} else {
-			recoverable = gerr.IsRecoverable(outcome.Err)
-		}
 		message := strings.TrimSpace(outcome.Message)
 		if message == "" {
 			message = git.NormalizeGitErrorMessage(outcome.Err.Error())
 		}
-		if recoverable {
-			r.MarkRecoverableError(message)
-		} else {
-			r.MarkCriticalError(message)
-		}
+		r.MarkCriticalError(message)
 		return
 	}
 
-	wasRecoverable := r.State.RecoverableError
 	applySuccessState(r, outcome)
 
-	// If we just refreshed a repository that was in a recoverable error state,
-	// trigger a state probe to verify if the error persists (e.g. network issues,
-	// missing upstream). This ensures we don't blindly clear errors just because
-	// the metadata reload succeeded.
-	if outcome.Operation == OperationRefresh && wasRecoverable {
+	// If we just refreshed a repository, trigger a state probe to verify if the error persists.
+	if outcome.Operation == OperationRefresh {
 		handleStateProbe(r)
 		return
 	}
@@ -184,16 +167,14 @@ func ScheduleRepositoryRefresh(r *git.Repository, outcome *OperationOutcome) err
 }
 
 type stateSnapshot struct {
-	status      git.WorkStatus
-	message     string
-	recoverable bool
+	status  git.WorkStatus
+	message string
 }
 
 func snapshotState(r *git.Repository) stateSnapshot {
 	return stateSnapshot{
-		status:      r.WorkStatus(),
-		message:     r.State.Message,
-		recoverable: r.State.RecoverableError,
+		status:  r.WorkStatus(),
+		message: r.State.Message,
 	}
 }
 
@@ -204,9 +185,6 @@ func stateChanged(prev stateSnapshot, r *git.Repository) bool {
 	if prev.message != r.State.Message {
 		return true
 	}
-	if prev.recoverable != r.State.RecoverableError {
-		return true
-	}
 	return false
 }
 
@@ -215,26 +193,26 @@ func handleStateProbe(r *git.Repository) {
 
 	branch := r.State.Branch
 	if branch == nil {
-		r.MarkRecoverableError("branch not set")
+		r.MarkCriticalError("branch not set")
 		return
 	}
 
 	upstream := branch.Upstream
 	if upstream == nil {
-		r.MarkRecoverableError("upstream not configured")
+		r.MarkCriticalError("upstream not configured")
 		return
 	}
 
 	remoteName, remoteBranch := resolveUpstreamParts(r, branch)
 	if remoteName == "" || remoteBranch == "" {
-		r.MarkRecoverableError("upstream not configured")
+		r.MarkCriticalError("upstream not configured")
 		return
 	}
 
 	// Schedule the upstream verification and fetch asynchronously via the git queue
 	// to avoid blocking the TUI
 	if err := scheduleUpstreamVerificationAndFetch(r, remoteName, remoteBranch); err != nil {
-		r.MarkRecoverableError(fmt.Sprintf("unable to schedule verification: %v", err))
+		r.MarkCriticalError(fmt.Sprintf("unable to schedule verification: %v", err))
 		return
 	}
 }
@@ -254,35 +232,17 @@ func scheduleUpstreamVerificationAndFetch(r *git.Repository, remoteName, remoteB
 			// First verify the upstream exists
 			exists, err := upstreamExistsOnRemoteWithContext(ctx, r, remoteName, remoteBranch)
 			if err != nil {
-				// Check if it is explicitly recoverable
-				if gerr.IsRecoverable(err) {
-					recoverable := true
-					return OperationOutcome{
-						Operation:           OperationStateProbe,
-						Err:                 err,
-						Message:             fmt.Sprintf("unable to verify upstream: %v", err),
-						RecoverableOverride: &recoverable,
-					}
-				}
-
-				// Fatal errors (exit 128) should be critical, not recoverable
-				// These include: network failures, permission denied, repo not found
-				recoverable := !isGitFatalError(err)
 				return OperationOutcome{
-					Operation:           OperationStateProbe,
-					Err:                 err,
-					Message:             fmt.Sprintf("unable to verify upstream: %v", err),
-					RecoverableOverride: &recoverable,
+					Operation: OperationStateProbe,
+					Err:       err,
+					Message:   fmt.Sprintf("unable to verify upstream: %v", err),
 				}
 			}
 			if !exists {
-				// Missing upstream is recoverable - user can configure it
-				recoverable := true
 				return OperationOutcome{
-					Operation:           OperationStateProbe,
-					Err:                 fmt.Errorf("upstream %s missing on remote", remoteName+"/"+remoteBranch),
-					Message:             fmt.Sprintf("upstream %s missing on remote", remoteName+"/"+remoteBranch),
-					RecoverableOverride: &recoverable,
+					Operation: OperationStateProbe,
+					Err:       fmt.Errorf("upstream %s missing on remote", remoteName+"/"+remoteBranch),
+					Message:   fmt.Sprintf("upstream %s missing on remote", remoteName+"/"+remoteBranch),
 				}
 			}
 
@@ -295,22 +255,10 @@ func scheduleUpstreamVerificationAndFetch(r *git.Repository, remoteName, remoteB
 			// Return OperationStateProbe (not OperationFetch) to avoid triggering
 			// a refresh cycle. The state probe is the initial evaluation and should
 			// complete without scheduling additional operations.
-			//
-			// Fatal errors (exit 128) during fetch should be critical.
-			// Other fetch errors are generally recoverable.
-			var recoverableOverride *bool
-			if err != nil {
-				recoverable := !isGitFatalError(err)
-				if gerr.IsRecoverable(err) {
-					recoverable = true
-				}
-				recoverableOverride = &recoverable
-			}
 			return OperationOutcome{
-				Operation:           OperationStateProbe,
-				Message:             msg,
-				Err:                 err,
-				RecoverableOverride: recoverableOverride,
+				Operation: OperationStateProbe,
+				Message:   msg,
+				Err:       err,
 			}
 		},
 	}
@@ -337,14 +285,6 @@ func upstreamExistsOnRemoteWithContext(ctx context.Context, r *git.Repository, r
 }
 
 func applySuccessState(r *git.Repository, outcome OperationOutcome) {
-	// Reset recoverable flag on success paths, but preserve it for Refresh operations
-	// because Refresh only reloads metadata and doesn't verify if the error condition
-	// (e.g. network issue, missing upstream) is resolved. We'll handle verification
-	// via state probe in EvaluateRepositoryState.
-	if outcome.Operation != OperationRefresh {
-		r.State.RecoverableError = false
-	}
-
 	message := strings.TrimSpace(outcome.Message)
 	prevMessage := ""
 	prevMessage = r.State.Message
@@ -469,14 +409,14 @@ func applyCleanlinessAsync(r *git.Repository) {
 	if branch.HasIncomingCommits() {
 		upstream := branch.Upstream
 		if upstream == nil || upstream.Name == "" {
-			r.MarkRecoverableError("upstream not configured")
+			r.MarkCriticalError("upstream not configured")
 			return
 		}
 
 		// Always check if fast-forward merge would succeed when there are incoming commits
 		mergeArg := upstreamMergeArgument(upstream)
 		if mergeArg == "" {
-			r.MarkRecoverableError("upstream not configured")
+			r.MarkCriticalError("upstream not configured")
 			return
 		}
 
@@ -488,7 +428,7 @@ func applyCleanlinessAsync(r *git.Repository) {
 
 		succeeds, err := fastForwardDryRunSucceeds(r, mergeArg)
 		if err != nil {
-			r.MarkRecoverableError(fmt.Sprintf("unable to verify fast-forward: %v", err))
+			r.MarkCriticalError(fmt.Sprintf("unable to verify fast-forward: %v", err))
 			return
 		}
 
