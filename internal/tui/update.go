@@ -609,7 +609,7 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g": // First g of gg - we need to check if it's followed by another g
 		// For now, just go to top (single g also works)
-		m.cursor = m.findFirstNavigableIndex()
+		m.cursor = 0
 		m.resetCommitScrollForSelected()
 
 	case "G": // Shift+G goes to end
@@ -617,7 +617,7 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetCommitScrollForSelected()
 
 	case "home":
-		m.cursor = m.findFirstNavigableIndex()
+		m.cursor = 0
 		m.resetCommitScrollForSelected()
 
 	case "end":
@@ -726,7 +726,6 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			repo := m.repositories[m.cursor]
 			if repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail {
 				repo.State.Message = ""
-				repo.SetWorkStatus(git.Available)
 				return m, nil
 			}
 		}
@@ -833,33 +832,6 @@ func repoIsDirty(repo *git.Repository) bool {
 		return false
 	}
 	return !repo.State.Branch.Clean
-}
-
-func repoIsNavigable(repo *git.Repository) bool {
-	if repo == nil {
-		return false
-	}
-	state := repo.State
-	if state != nil && state.RecoverableError {
-		return true
-	}
-	if state == nil {
-		return false
-	}
-	status := repo.WorkStatus()
-	if status == git.Fail {
-		return false
-	}
-	if status == git.Queued {
-		return true
-	}
-	if status.Ready {
-		return true
-	}
-	if repoIsDirty(repo) {
-		return true
-	}
-	return false
 }
 
 func repoIsActionable(repo *git.Repository) bool {
@@ -1321,44 +1293,14 @@ func (m *Model) findNextReadyIndex(start int, direction int) int {
 		return 0
 	}
 	index := start
-	for i := 0; i < count; i++ {
-		// Normalize index to remain inside bounds
-		if index < 0 {
-			index = count - 1
-		}
-		if index >= count {
-			index = 0
-		}
-		repo := m.repositories[index]
-		if repoIsNavigable(repo) {
-			return index
-		}
-		index += direction
+	// Normalize index to remain inside bounds
+	if index < 0 {
+		index = count - 1
 	}
-	// No ready repositories, keep original index but clamp to within range
-	if start < 0 {
-		return 0
+	if index >= count {
+		index = 0
 	}
-	if start >= count {
-		return count - 1
-	}
-	return start
-}
-
-// findFirstNavigableIndex finds the first navigable repository in the list.
-// Returns 0 if no navigable repository is found.
-func (m *Model) findFirstNavigableIndex() int {
-	count := len(m.repositories)
-	if count == 0 {
-		return 0
-	}
-	for i := 0; i < count; i++ {
-		if repoIsNavigable(m.repositories[i]) {
-			return i
-		}
-	}
-	// No navigable repositories found, return 0
-	return 0
+	return index
 }
 
 // findLastNavigableIndex finds the last navigable repository in the list.
@@ -1368,12 +1310,6 @@ func (m *Model) findLastNavigableIndex() int {
 	if count == 0 {
 		return 0
 	}
-	for i := count - 1; i >= 0; i-- {
-		if repoIsNavigable(m.repositories[i]) {
-			return i
-		}
-	}
-	// No navigable repositories found, return last index
 	return count - 1
 }
 

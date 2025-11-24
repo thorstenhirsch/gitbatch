@@ -1446,14 +1446,18 @@ func (m *Model) renderStatusBar() string {
 		center = truncateString(fmt.Sprintf("%s: %s", label, display), maxCenter)
 	} else {
 		if failed {
+			hasMessage := focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != ""
 			message := "Operation failed"
-			if focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != "" {
+			if hasMessage {
 				message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
 			}
 			if requiresCredentials {
 				statusBarStyle = m.styles.StatusBarCredentials
 				left = " credentials required"
-				right = "enter: provide | c: clear | TAB: lazygit"
+				right = "enter: provide | TAB: lazygit"
+				if hasMessage {
+					right = "enter: provide | c: clear | TAB: lazygit"
+				}
 				rightWidth = lipgloss.Width(right)
 				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
 				if maxCenter < 0 {
@@ -1463,7 +1467,11 @@ func (m *Model) renderStatusBar() string {
 			} else if recoverable {
 				statusBarStyle = m.styles.StatusBarRecoverable
 				left = " repo needs attention"
-				right = "c: clear | TAB: lazygit"
+				if hasMessage {
+					right = "c: clear | TAB: lazygit"
+				} else {
+					right = "TAB: lazygit | ? for help"
+				}
 				rightWidth = lipgloss.Width(right)
 				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
 				if maxCenter < 0 {
@@ -1473,7 +1481,11 @@ func (m *Model) renderStatusBar() string {
 			} else {
 				statusBarStyle = m.styles.StatusBarError
 				left = " repo failed"
-				right = "c: clear"
+				if hasMessage {
+					right = "c: clear | TAB: lazygit"
+				} else {
+					right = "TAB: lazygit | ? for help"
+				}
 				rightWidth = lipgloss.Width(right)
 				maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
 				if maxCenter < 0 {
