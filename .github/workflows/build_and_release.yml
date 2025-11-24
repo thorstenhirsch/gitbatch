@@ -26,8 +26,8 @@ jobs:
         uses: wangyoucao577/go-release-action@v1
         with:
           project_path: ./cmd/gitbatch
-          build_flags: "-tags=${{ matrix.goos }}"
           ldflags: "-X main.version=${{ github.ref_name }}"
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
+          overwrite: true

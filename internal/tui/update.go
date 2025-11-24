@@ -1210,13 +1210,9 @@ func (m *Model) maybeStartInitialStateEvaluation(repos []*git.Repository) tea.Cm
 			if repo.State != nil {
 				repo.State.Message = "waiting"
 			}
-			repo.SetWorkStatus(git.Pending)
+			repo.SetWorkStatusSilent(git.Pending)
 			// Don't notify per-repository during batch init - causes TUI lag
 			command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
-
-			// Small sleep to yield to other goroutines and prevent channel flooding
-			// during massive initial scheduling
-			time.Sleep(5 * time.Millisecond)
 		}
 
 		m.initialStateProbeStarted = true

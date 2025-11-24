@@ -98,6 +98,18 @@ func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
 			return
 		}
 
+		// Check for unmerged files or conflicts
+		if isUnmergedOrConflictError(outcome.Err) {
+			message := strings.TrimSpace(outcome.Message)
+			if message == "" {
+				message = git.NormalizeGitErrorMessage(outcome.Err.Error())
+			}
+			r.State.Message = message
+			r.MarkDisabled()
+			r.SetWorkStatus(git.Available)
+			return
+		}
+
 		message := strings.TrimSpace(outcome.Message)
 		if message == "" {
 			message = git.NormalizeGitErrorMessage(outcome.Err.Error())
@@ -441,16 +453,9 @@ func applyCleanlinessAsync(r *git.Repository) {
 				r.SetWorkStatus(git.Queued)
 			}
 		} else {
-			// Working tree is NOT clean - check if local changes conflict with incoming commits
-			if succeeds {
-				// Even though git reports "working tree NOT clean", if fast-forward
-				// succeeds, the local changes don't conflict with incoming commits.
-				r.MarkClean()
-				// Automatically queue the repo for the current operation since fast-forward will work
-				r.SetWorkStatus(git.Queued)
-			} else {
-				r.MarkDisabled()
-			}
+			// Working tree is NOT clean.
+			// Even if fast-forward is possible, user prefers to treat dirty state as blocking.
+			r.MarkDisabled()
 		}
 		if r.WorkStatus() != git.Available && r.WorkStatus() != git.Queued {
 			r.SetWorkStatus(git.Available)
@@ -589,4 +594,15 @@ func upstreamMergeArgument(upstream *git.RemoteBranch) string {
 		return upstream.Reference.Name().String()
 	}
 	return ""
+}
+
+// isUnmergedOrConflictError checks if the error is related to unmerged files or conflicts.
+func isUnmergedOrConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return msg == string(gerr.ErrUnmergedFiles) ||
+		msg == string(gerr.ErrConflictAfterMerge) ||
+		msg == string(gerr.ErrOverwrittenByMerge)
 }

@@ -228,9 +228,9 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 	applyCleanliness(repo)
 	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
-	// Verify: should be clean (fast-forward would succeed)
-	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean - fast-forward would succeed")
-	require.Equal(t, git.Queued, repo.WorkStatus(), "status should be Queued")
+	// Verify: should be disabled (dirty state takes precedence over fast-forward)
+	require.False(t, repo.State.Branch.Clean, "repository should be marked as NOT clean - dirty state takes precedence")
+	require.NotEqual(t, git.Queued, repo.WorkStatus(), "status should NOT be Queued")
 }
 
 // TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict tests the scenario where
@@ -629,7 +629,7 @@ func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 	applyCleanliness(repo)
 	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
-	// Verify: should be clean (fast-forward would succeed, no conflicts)
-	require.True(t, repo.State.Branch.Clean, "repository should be marked as CLEAN - fast-forward would succeed with non-conflicting changes")
-	require.Equal(t, git.Queued, repo.WorkStatus(), "status should be Queued")
+	// Verify: should be disabled (dirty state takes precedence over fast-forward)
+	require.False(t, repo.State.Branch.Clean, "repository should be marked as NOT clean - dirty state takes precedence")
+	require.NotEqual(t, git.Queued, repo.WorkStatus(), "status should NOT be Queued")
 }

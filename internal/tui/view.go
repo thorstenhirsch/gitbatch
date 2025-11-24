@@ -1469,8 +1469,6 @@ func (m *Model) renderStatusBar() string {
 		left = fmt.Sprintf(" %s %s push failed", pushSymbol, repoName)
 		center = "Retry push with --force?"
 		right = "return: confirm | esc: cancel"
-	} else if !failed && !dirty && m.err == nil {
-		center = fmt.Sprintf("%s", center)
 	}
 
 	if m.currentView != OverviewView && m.activeCredentialPrompt == nil && m.activeForcePrompt == nil {
