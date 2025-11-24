@@ -56,7 +56,7 @@ func TestStart(t *testing.T) {
 	}
 }
 
-func TestFetchJobPreservesRecoverableState(t *testing.T) {
+func TestFetchJobPreservesErrorState(t *testing.T) {
 	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
 
@@ -82,8 +82,7 @@ func TestFetchJobPreservesRecoverableState(t *testing.T) {
 
 	require.NoError(t, command.ScheduleRepositoryRefresh(repo, nil))
 	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
-	require.NotNil(t, repo.State.Branch.Upstream)
-	require.Nil(t, repo.State.Branch.Upstream.Reference)
+	require.Nil(t, repo.State.Branch.Upstream)
 
 	job := &Job{JobType: FetchJob, Repository: repo}
 	require.NoError(t, job.Start())
@@ -91,6 +90,5 @@ func TestFetchJobPreservesRecoverableState(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return repo.WorkStatus() == git.Fail
 	}, 2*time.Second, 50*time.Millisecond)
-	require.True(t, repo.State.RecoverableError)
 	require.Contains(t, strings.ToLower(repo.State.Message), "upstream")
 }

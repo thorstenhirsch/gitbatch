@@ -129,23 +129,6 @@ func RequiresCredentials(err error) bool {
 		strings.Contains(errMsg, "403 forbidden")
 }
 
-// IsRecoverable checks if the error is recoverable (can be fixed by user action)
-func IsRecoverable(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// Check for specific error types that are recoverable
-	switch err {
-	case ErrAlreadyUpToDate, ErrRemoteBranchNotSpecified, ErrMergeAbortedTryCommit,
-		ErrConflictAfterMerge, ErrUnmergedFiles, ErrOverwrittenByMerge,
-		ErrRemoteNotFound, ErrNetworkTimeout, ErrNetworkUnreachable, ErrDNSError, ErrSSLError:
-		return true
-	}
-
-	return false
-}
-
 // ParseGitError takes git output as an input and tries to find some meaningful
 // errors can be used by the app
 func ParseGitError(out string, err error) error {

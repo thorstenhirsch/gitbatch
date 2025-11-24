@@ -164,9 +164,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		currentModTime := repo.RefreshModTime()
 		if currentModTime.After(msg.originalModTime) {
 			repo.State.Message = "waiting"
-			// Restore the recoverable error state so that EvaluateRepositoryState
-			// knows to trigger a probe if needed.
-			repo.State.RecoverableError = msg.originalState.RecoverableError
 
 			repo.SetWorkStatus(git.Pending)
 			repo.NotifyRepositoryUpdated()
@@ -271,7 +268,7 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			r := m.repositories[m.cursor]
 			if isLazygitAvailable() {
 				// Snapshot the current state BEFORE setting it to Working
-				// This ensures we restore the correct state (e.g. RecoverableError) if no changes occur
+				// This ensures we restore the correct state if no changes occur
 				var savedState git.RepositoryState
 				if r.State != nil {
 					savedState = *r.State
@@ -1245,12 +1242,10 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 				Options:    opts,
 			}
 			if err := jobEntry.Start(); err != nil {
-				recoverable := true
 				command.ScheduleStateEvaluation(repo, command.OperationOutcome{
-					Operation:           command.OperationFetch,
-					Err:                 err,
-					Message:             err.Error(),
-					RecoverableOverride: &recoverable,
+					Operation: command.OperationFetch,
+					Err:       err,
+					Message:   err.Error(),
 				})
 			}
 

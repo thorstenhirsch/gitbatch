@@ -86,13 +86,11 @@ func AttachGitCommandWorker(r *git.Repository) {
 			if op == "" {
 				op = OperationGit
 			}
-			recoverable := false
 			err := fmt.Errorf("%s command timed out after %s", op, timeout)
 			ScheduleStateEvaluation(r, OperationOutcome{
-				Operation:           op,
-				Err:                 err,
-				Message:             "git command timed out",
-				RecoverableOverride: &recoverable,
+				Operation: op,
+				Err:       err,
+				Message:   "git command timed out",
 			})
 			select {
 			case <-resultCh:

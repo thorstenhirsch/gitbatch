@@ -134,38 +134,35 @@ var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#42A5F5"
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
-	Title                         lipgloss.Style
-	StatusBarPull                 lipgloss.Style
-	StatusBarMerge                lipgloss.Style
-	StatusBarRecoverable          lipgloss.Style
-	StatusBarCredentials          lipgloss.Style
-	StatusBarRebase               lipgloss.Style
-	StatusBarPush                 lipgloss.Style
-	StatusBarDisabled             lipgloss.Style
-	StatusBarError                lipgloss.Style
-	Help                          lipgloss.Style
-	List                          lipgloss.Style
-	ListItem                      lipgloss.Style
-	RecoverableFailedSelectedItem lipgloss.Style
-	CredentialsSelectedItem       lipgloss.Style
-	SelectedItem                  lipgloss.Style
-	DisabledSelectedItem          lipgloss.Style
-	CommonSelectedItem            lipgloss.Style
-	FailedSelectedItem            lipgloss.Style
-	RecoverableFailedItem         lipgloss.Style
-	CredentialsItem               lipgloss.Style
-	QueuedItem                    lipgloss.Style
-	PendingItem                   lipgloss.Style
-	WorkingItem                   lipgloss.Style
-	SuccessItem                   lipgloss.Style
-	FailedItem                    lipgloss.Style
-	DisabledItem                  lipgloss.Style
-	BranchInfo                    lipgloss.Style
-	KeyBinding                    lipgloss.Style
-	Panel                         lipgloss.Style
-	PanelTitle                    lipgloss.Style
-	Error                         lipgloss.Style
-	TableBorder                   lipgloss.Style
+	Title                   lipgloss.Style
+	StatusBarPull           lipgloss.Style
+	StatusBarMerge          lipgloss.Style
+	StatusBarCredentials    lipgloss.Style
+	StatusBarRebase         lipgloss.Style
+	StatusBarPush           lipgloss.Style
+	StatusBarDisabled       lipgloss.Style
+	StatusBarError          lipgloss.Style
+	Help                    lipgloss.Style
+	List                    lipgloss.Style
+	ListItem                lipgloss.Style
+	CredentialsSelectedItem lipgloss.Style
+	SelectedItem            lipgloss.Style
+	DisabledSelectedItem    lipgloss.Style
+	CommonSelectedItem      lipgloss.Style
+	FailedSelectedItem      lipgloss.Style
+	CredentialsItem         lipgloss.Style
+	QueuedItem              lipgloss.Style
+	PendingItem             lipgloss.Style
+	WorkingItem             lipgloss.Style
+	SuccessItem             lipgloss.Style
+	FailedItem              lipgloss.Style
+	DisabledItem            lipgloss.Style
+	BranchInfo              lipgloss.Style
+	KeyBinding              lipgloss.Style
+	Panel                   lipgloss.Style
+	PanelTitle              lipgloss.Style
+	Error                   lipgloss.Style
+	TableBorder             lipgloss.Style
 }
 
 // DefaultStyles returns the default style set
@@ -200,13 +197,9 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
 			Background(lipgloss.AdaptiveColor{Light: "#FFF59D", Dark: "#FDD835"}).
 			Padding(0, 1),
-		StatusBarRecoverable: lipgloss.NewStyle().
+		StatusBarCredentials: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#FFF3E0"}).
 			Background(lipgloss.AdaptiveColor{Light: "#FFE0B2", Dark: "#FB8C00"}).
-			Padding(0, 1),
-		StatusBarCredentials: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
-			Background(lipgloss.AdaptiveColor{Light: "#EC407A", Dark: "#D81B60"}).
 			Padding(0, 1),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
@@ -228,13 +221,9 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#C62828"}).
 			Bold(true),
-		RecoverableFailedSelectedItem: lipgloss.NewStyle().
+		CredentialsSelectedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#3E2723", Dark: "#FFF3E0"}).
 			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
-			Bold(true),
-		CredentialsSelectedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
-			Background(lipgloss.AdaptiveColor{Light: "#EC407A", Dark: "#D81B60"}).
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
 			Foreground(tagHighlightColor),
@@ -246,10 +235,8 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#388E3C", Dark: "#81C784"}),
 		FailedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}),
-		RecoverableFailedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#EF6C00", Dark: "#FFA726"}),
 		CredentialsItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#EC407A", Dark: "#F48FB1"}),
+			Foreground(lipgloss.AdaptiveColor{Light: "#EF6C00", Dark: "#FFA726"}),
 		DisabledItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#9A7B4F"}),
 		BranchInfo: lipgloss.NewStyle().
