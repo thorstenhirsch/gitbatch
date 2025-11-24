@@ -22,6 +22,15 @@ func (r *Repository) initRemotes() error {
 	if err != nil {
 		return err
 	}
+
+	// Pre-load all remote branches once using git for-each-ref
+	// This avoids iterating over all references for each remote
+	remoteBranches, err := r.loadAllRemoteBranches()
+	if err != nil {
+		// Fallback to empty map if command fails, though it shouldn't
+		remoteBranches = make(map[string][]*RemoteBranch)
+	}
+
 	for _, rm := range rms {
 		rfs := make([]string, 0)
 		for _, rf := range rm.Config().Fetch {
@@ -31,10 +40,13 @@ func (r *Repository) initRemotes() error {
 			Name:     rm.Config().Name,
 			URL:      rm.Config().URLs,
 			RefSpecs: rfs,
+			Branches: remoteBranches[rm.Config().Name],
 		}
-		if err := remote.loadRemoteBranches(r); err != nil {
-			continue
+		// If map lookup failed or was empty, ensure slice is not nil
+		if remote.Branches == nil {
+			remote.Branches = make([]*RemoteBranch, 0)
 		}
+
 		r.Remotes = append(r.Remotes, remote)
 	}
 

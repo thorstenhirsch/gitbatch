@@ -13,7 +13,7 @@ import (
 // will be forwarded to the state queue regardless of success or failure.
 type GitCommandFunc func(ctx context.Context) OperationOutcome
 
-const DefaultGitCommandTimeout = 7 * time.Second
+const DefaultGitCommandTimeout = 10 * time.Second
 
 // GitCommandRequest encapsulates metadata required by the git queue listener.
 // It declares a timeout enforced by the queue infrastructure.

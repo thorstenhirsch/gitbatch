@@ -3,6 +3,7 @@ package git
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
+
+var trackRegex = regexp.MustCompile(`\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]`)
 
 // Branch is the wrapper of go-git's Reference struct. In addition to that, it
 // also holds name of the branch, pullable and pushable commit count from the
@@ -42,66 +45,120 @@ const (
 // git command and its output
 func (r *Repository) initBranches() error {
 	lbs := make([]*Branch, 0)
-	bs, err := r.Repo.Branches()
-	if err != nil {
-		return err
-	}
-	defer bs.Close()
-	headRef, err := r.Repo.Head()
-	if err != nil {
-		return err
-	}
-	var branchFound bool
-	var push, pull string
 
-	// Check cleanliness once for the repository, not for every branch
+	// Check cleanliness once for the repository
 	status, err := r.GetWorkTreeStatus()
 	isRepoClean := err == nil && status.Clean
 
-	_ = bs.ForEach(func(b *plumbing.Reference) error {
-		if b.Type() != plumbing.HashReference {
-			return nil
+	// Use git for-each-ref to get all branch info in one go
+	args := []string{
+		"for-each-ref",
+		"--format=%(HEAD)|%(refname)|%(objectname)|%(upstream:short)|%(upstream:track)",
+		"refs/heads",
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.AbsPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) < 5 {
+			continue
 		}
 
-		// Cleanliness is a property of the working tree, which is associated with the current HEAD.
-		// We only set it accurately for the HEAD branch. For others, it's not really applicable
-		// in the same way, but we default to true (clean) to avoid false positives if used elsewhere.
+		isHead := parts[0] == "*"
+		refName := parts[1]
+		hash := parts[2]
+		upstreamShort := parts[3]
+		track := parts[4]
+
+		name := strings.TrimPrefix(refName, "refs/heads/")
+
+		var push, pull string
+		if track != "" {
+			matches := trackRegex.FindStringSubmatch(track)
+			if len(matches) > 0 {
+				if matches[1] != "" {
+					push = matches[1]
+				} else {
+					push = "0"
+				}
+				if matches[2] != "" {
+					pull = matches[2]
+				} else {
+					pull = "0"
+				}
+			} else if track == "[gone]" {
+				push = "?"
+				pull = "?"
+			}
+		} else {
+			if upstreamShort != "" {
+				push = "0"
+				pull = "0"
+			} else {
+				push = "?"
+				pull = "?"
+			}
+		}
+
+		ref := plumbing.NewHashReference(plumbing.ReferenceName(refName), plumbing.NewHash(hash))
+
 		clean := true
-		if b.Name() == headRef.Name() {
+		if isHead {
 			clean = isRepoClean
 		}
 
 		branch := &Branch{
-			Name:      b.Name().Short(),
-			Reference: b,
+			Name:      name,
+			Reference: ref,
 			State:     &BranchState{},
 			Pushables: push,
 			Pullables: pull,
 			Clean:     clean,
 		}
-		if b.Name() == headRef.Name() {
-			r.State.Branch = branch
-			branchFound = true
-		}
-		lbs = append(lbs, branch)
 
-		return nil
-	})
-	if !branchFound {
-		branch := &Branch{
-			Name:      headRef.Hash().String(),
-			Reference: headRef,
-			State:     &BranchState{},
-			Pushables: "?",
-			Pullables: "?",
-			Clean:     isRepoClean,
+		if upstreamShort != "" {
+			for _, remote := range r.Remotes {
+				for _, rb := range remote.Branches {
+					if rb.Name == upstreamShort {
+						branch.Upstream = rb
+						break
+					}
+				}
+				if branch.Upstream != nil {
+					break
+				}
+			}
 		}
+
 		lbs = append(lbs, branch)
-		r.State.Branch = branch
+		if isHead {
+			r.State.Branch = branch
+		}
 	}
-	rb, err := getUpstream(r, r.State.Branch.Name)
-	if err == nil {
-		r.State.Branch.Upstream = rb
+
+	if r.State.Branch == nil {
+		headRef, err := r.Repo.Head()
+		if err == nil {
+			branch := &Branch{
+				Name:      headRef.Hash().String(),
+				Reference: headRef,
+				State:     &BranchState{},
+				Pushables: "?",
+				Pullables: "?",
+				Clean:     isRepoClean,
+			}
+			lbs = append(lbs, branch)
+			r.State.Branch = branch
+		}
 	}
 
 	r.Branches = lbs
@@ -126,19 +183,12 @@ func (r *Repository) Checkout(b *Branch) error {
 	}
 	r.State.Branch = b
 
-	rb, err := getUpstream(r, r.State.Branch.Name)
-	if err == nil {
-		r.State.Branch.Upstream = rb
-	}
 	_ = b.initCommits(r)
 
 	if err := r.Publish(BranchUpdated, nil); err != nil {
 		return err
 	}
-	if err := r.SyncRemoteAndBranch(b); err != nil {
-		return err
-	}
-	return r.Publish(RepositoryUpdated, nil)
+	return nil
 }
 
 // RevListOptions defines the rules of rev-list func
@@ -147,38 +197,6 @@ type RevListOptions struct {
 	Ref1 string
 	// Ref2 is the second reference hash to link
 	Ref2 string
-}
-
-// RevListCount returns the count of commits between two references.
-// This is more efficient than RevList when you only need the count.
-func RevListCount(r *Repository, options RevListOptions) (int, error) {
-	// Validate that both references are provided
-	if len(options.Ref1) == 0 || len(options.Ref2) == 0 {
-		return 0, fmt.Errorf("both Ref1 and Ref2 must be provided")
-	}
-
-	args := []string{revlistCommand, "--count"}
-	arg1 := options.Ref1 + ".." + options.Ref2
-	args = append(args, arg1)
-
-	cmd := exec.Command("git", args...)
-	cmd.Dir = r.AbsPath
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return 0, fmt.Errorf("rev-list --count failed: %w (output: %s)", err, string(out))
-	}
-
-	s := strings.TrimSpace(string(out))
-	if len(s) == 0 {
-		return 0, nil
-	}
-
-	count, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, fmt.Errorf("invalid count output: %s", s)
-	}
-
-	return count, nil
 }
 
 // RevList is the legacy implementation of "git rev-list" command.
@@ -217,67 +235,6 @@ func RevList(r *Repository, options RevListOptions) ([]*object.Commit, error) {
 	}
 	sort.Sort(CommitTime(commits))
 	return commits, nil
-}
-
-// SyncRemoteAndBranch synchronizes remote branch with current branch
-func (r *Repository) SyncRemoteAndBranch(b *Branch) error {
-	headRef, err := r.Repo.Head()
-	if err != nil {
-		return err
-	}
-	if b.Upstream == nil {
-		b.Pullables = "?"
-		b.Pushables = "?"
-		return nil
-	}
-
-	// Validate upstream reference exists
-	if b.Upstream.Reference == nil {
-		b.Pullables = "?"
-		b.Pushables = "?"
-		return nil
-	}
-
-	head := headRef.Hash().String()
-	upstreamHash := b.Upstream.Reference.Hash().String()
-
-	// Validate that both hashes are valid (40 character hex strings)
-	if len(head) != hashLength || len(upstreamHash) != hashLength {
-		b.Pullables = "?"
-		b.Pushables = "?"
-		return nil
-	}
-
-	var push, pull string
-
-	// Calculate pushables (commits in local that are not in upstream)
-	// Use RevListCount for better performance and resilience
-	pushCount, err := RevListCount(r, RevListOptions{
-		Ref1: upstreamHash,
-		Ref2: head,
-	})
-	if err != nil {
-		// On error, keep trying for pullables instead of failing completely
-		push = "?"
-	} else {
-		push = strconv.Itoa(pushCount)
-	}
-
-	// Calculate pullables (commits in upstream that are not in local)
-	pullCount, err := RevListCount(r, RevListOptions{
-		Ref1: head,
-		Ref2: upstreamHash,
-	})
-	if err != nil {
-		// On error, set to unknown but don't fail the whole operation
-		pull = "?"
-	} else {
-		pull = strconv.Itoa(pullCount)
-	}
-
-	b.Pullables = pull
-	b.Pushables = push
-	return nil
 }
 
 // InitializeCommits loads the commits
@@ -356,87 +313,4 @@ func (r *Repository) GetWorkTreeStatus() (WorkTreeStatus, error) {
 	}
 
 	return WorkTreeStatus{Clean: false, HasConflicts: hasConflicts}, nil
-}
-
-func getUpstream(r *Repository, branchName string) (*RemoteBranch, error) {
-	args := []string{"config", "--get", "branch." + branchName + ".remote"}
-	cmd := exec.Command("git", args...)
-	cmd.Dir = r.AbsPath
-	cr, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("upstream not found: %w", err)
-	}
-
-	remoteName := strings.TrimSpace(string(cr))
-	if remoteName == "" {
-		return nil, fmt.Errorf("upstream remote is empty")
-	}
-
-	args = []string{"config", "--get", "branch." + branchName + ".merge"}
-	cmd = exec.Command("git", args...)
-	cmd.Dir = r.AbsPath
-	cm, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("upstream merge config not found: %w", err)
-	}
-
-	mergeRef := strings.TrimSpace(string(cm))
-	if mergeRef == "" {
-		return nil, fmt.Errorf("invalid merge branch configuration")
-	}
-
-	mergeBranchName := normalizeMergeBranchName(remoteName, branchName, mergeRef)
-	if mergeBranchName == "" {
-		return nil, fmt.Errorf("could not determine merge branch name")
-	}
-
-	// Find the remote by name
-	var targetRemote *Remote
-	for _, rm := range r.Remotes {
-		if rm.Name == remoteName {
-			targetRemote = rm
-			r.State.Remote = rm
-			break
-		}
-	}
-
-	if targetRemote == nil {
-		return nil, fmt.Errorf("remote %s not found in repository", remoteName)
-	}
-
-	// Find the remote branch
-	targetBranchName := targetRemote.Name + "/" + mergeBranchName
-	for _, rb := range targetRemote.Branches {
-		if rb.Name == targetBranchName {
-			return rb, nil
-		}
-	}
-
-	// Remote branch is configured but not present locally; return placeholder so
-	// downstream checks can verify the remote state via git ls-remote.
-	return &RemoteBranch{Name: targetBranchName}, nil
-}
-
-func normalizeMergeBranchName(remoteName, branchName, mergeRef string) string {
-	merged := strings.TrimSpace(mergeRef)
-	if merged == "" {
-		return ""
-	}
-
-	// Remove common ref prefixes
-	merged = strings.TrimPrefix(merged, "refs/heads/")
-	merged = strings.TrimPrefix(merged, "refs/remotes/")
-	merged = strings.TrimPrefix(merged, "heads/")
-	merged = strings.TrimPrefix(merged, "remotes/")
-
-	if remoteName != "" {
-		merged = strings.TrimPrefix(merged, remoteName+"/")
-	}
-
-	merged = strings.TrimPrefix(merged, "/")
-	if merged == "" {
-		return strings.TrimSpace(branchName)
-	}
-
-	return merged
 }

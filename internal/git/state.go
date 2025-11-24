@@ -115,11 +115,11 @@ func NormalizeGitErrorMessage(msg string) string {
 		msg = ""
 	}
 	if msg == "" {
-		return "unknown error"
+		return ""
 	}
 	fields := strings.Fields(msg)
 	if len(fields) == 0 {
-		return "unknown error"
+		return ""
 	}
 	return strings.Join(fields, " ")
 }

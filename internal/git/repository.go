@@ -42,11 +42,11 @@ type Repository struct {
 
 // RepositoryState is the current pointers of a repository
 type RepositoryState struct {
-	workStatus         WorkStatus
-	Branch             *Branch
-	Remote             *Remote
-	Message            string
-	RecoverableError   bool
+	workStatus          WorkStatus
+	Branch              *Branch
+	Remote              *Remote
+	Message             string
+	RecoverableError    bool
 	RequiresCredentials bool
 }
 
@@ -224,9 +224,6 @@ func (r *Repository) loadComponents(reset bool) error {
 		return err
 	}
 
-	if err := r.SyncRemoteAndBranch(r.State.Branch); err != nil {
-		return err
-	}
 	return r.loadStashedItems()
 }
 
