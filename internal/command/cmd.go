@@ -143,7 +143,7 @@ func enrichGitEnv(base []string) []string {
 	copy(env, base)
 	// We don't disable terminal prompts anymore, because we want to detect them
 	// and return a proper error.
-	// env = ensureEnv(env, "GIT_TERMINAL_PROMPT", "0")
+	env = ensureEnv(env, "GIT_TERMINAL_PROMPT", "0")
 	env = ensureEnv(env, "GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1")
 	env = ensureEnv(env, "GIT_HTTP_LOW_SPEED_LIMIT", "1")
 	env = ensureEnv(env, "GIT_HTTP_LOW_SPEED_TIME", "10")
