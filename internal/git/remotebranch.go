@@ -1,10 +1,10 @@
 package git
 
 import (
+	"os/exec"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // RemoteBranch is the wrapper of go-git's Reference struct. In addition to
@@ -14,39 +14,60 @@ type RemoteBranch struct {
 	Reference *plumbing.Reference
 }
 
-// search for the remote branches of the remote. It takes the go-git's repo
-// pointer in order to get storer struct
-func (rm *Remote) loadRemoteBranches(r *Repository) error {
-	rm.Branches = make([]*RemoteBranch, 0)
-	bs, err := remoteBranchesIter(r.Repo.Storer)
-	if err != nil {
-		return err
+// loadAllRemoteBranches fetches all remote branches using git for-each-ref
+// and returns them grouped by remote name.
+func (r *Repository) loadAllRemoteBranches() (map[string][]*RemoteBranch, error) {
+	args := []string{
+		"for-each-ref",
+		"--format=%(refname)|%(objectname)",
+		"refs/remotes",
 	}
-	defer bs.Close()
-	err = bs.ForEach(func(b *plumbing.Reference) error {
-		if strings.Split(b.Name().Short(), "/")[0] == rm.Name {
-			rm.Branches = append(rm.Branches, &RemoteBranch{
-				Name:      b.Name().Short(),
-				Reference: b,
-			})
-		}
-		return nil
-	})
-	return err
-}
-
-// create an iterator for the references. it checks if the reference is a hash
-// reference
-func remoteBranchesIter(s storer.ReferenceStorer) (storer.ReferenceIter, error) {
-	refs, err := s.IterReferences()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.AbsPath
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, err
 	}
 
-	return storer.NewReferenceFilteredIter(func(ref *plumbing.Reference) bool {
-		if ref.Type() == plumbing.HashReference {
-			return ref.Name().IsRemote()
+	result := make(map[string][]*RemoteBranch)
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+
+	for _, line := range lines {
+		if line == "" {
+			continue
 		}
-		return false
-	}, refs), nil
+		parts := strings.Split(line, "|")
+		if len(parts) < 2 {
+			continue
+		}
+
+		refName := parts[0]
+		hash := parts[1]
+
+		// refName is like refs/remotes/origin/HEAD or refs/remotes/origin/master
+		shortName := strings.TrimPrefix(refName, "refs/remotes/")
+		remoteParts := strings.SplitN(shortName, "/", 2)
+		if len(remoteParts) < 2 {
+			continue
+		}
+		remoteName := remoteParts[0]
+		// branchName := remoteParts[1]
+
+		// Skip HEAD refs
+		if strings.HasSuffix(refName, "/HEAD") {
+			continue
+		}
+
+		rb := &RemoteBranch{
+			Name:      shortName,
+			Reference: plumbing.NewHashReference(plumbing.ReferenceName(refName), plumbing.NewHash(hash)),
+		}
+
+		if _, ok := result[remoteName]; !ok {
+			result[remoteName] = make([]*RemoteBranch, 0)
+		}
+		result[remoteName] = append(result[remoteName], rb)
+	}
+
+	return result, nil
 }

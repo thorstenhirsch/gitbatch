@@ -731,12 +731,8 @@ func commitContentForRepo(r *git.Repository) string {
 	if r == nil {
 		return ""
 	}
-	if r.WorkStatus() == git.Fail && r.State != nil {
-		message := singleLineMessage(r.State.Message)
-		if message == "" {
-			return "unknown error"
-		}
-		return message
+	if r.WorkStatus() == git.Fail && r.State != nil && r.State.Message != "" {
+		return singleLineMessage(r.State.Message)
 	}
 
 	commitMsg, commitHash := commitSummary(r)

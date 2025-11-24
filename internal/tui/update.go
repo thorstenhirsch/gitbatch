@@ -724,8 +724,9 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
 			repo := m.repositories[m.cursor]
-			if repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail && repo.State.Message != "" {
+			if repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail {
 				repo.State.Message = ""
+				repo.SetWorkStatus(git.Available)
 				return m, nil
 			}
 		}
@@ -1230,6 +1231,9 @@ func (m *Model) maybeStartInitialStateEvaluation(repos []*git.Repository) tea.Cm
 
 	// Batch all initialization work in a single goroutine to avoid blocking TUI
 	return func() tea.Msg {
+		// Process in chunks to allow UI updates in between if needed,
+		// though this runs in a separate goroutine, scheduling too many
+		// events at once can still flood the channel.
 		for _, repo := range filtered {
 			if repo == nil {
 				continue
@@ -1240,6 +1244,10 @@ func (m *Model) maybeStartInitialStateEvaluation(repos []*git.Repository) tea.Cm
 			repo.SetWorkStatus(git.Pending)
 			// Don't notify per-repository during batch init - causes TUI lag
 			command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
+
+			// Small sleep to yield to other goroutines and prevent channel flooding
+			// during massive initial scheduling
+			time.Sleep(5 * time.Millisecond)
 		}
 
 		m.initialStateProbeStarted = true
@@ -1273,6 +1281,9 @@ func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
 					RecoverableOverride: &recoverable,
 				})
 			}
+
+			// Yield to prevent locking up the scheduler and allow UI updates
+			time.Sleep(10 * time.Millisecond)
 		}
 		return jobCompletedMsg{}
 	}
