@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -66,9 +65,6 @@ func RunWithContextTimeout(ctx context.Context, d string, c string, args []strin
 		cmd.Dir = d
 	}
 	cmd.Env = enrichGitEnv(os.Environ())
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
 	var buf scanningWriter
 	credentialDetected := false
 	buf.callback = func(p []byte) {
@@ -180,9 +176,6 @@ func ReturnWithContext(ctx context.Context, d string, c string, args []string) (
 		cmd.Dir = d
 	}
 	cmd.Env = enrichGitEnv(os.Environ())
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
 	if err := cmd.Start(); err != nil {
 		return -1, err
 	}
