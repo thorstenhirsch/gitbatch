@@ -56,26 +56,33 @@ type PushJobConfig struct {
 // Start executes the job by scheduling the appropriate git command.
 // The job will be processed asynchronously by the git queue.
 func (j *Job) Start() error {
+	if j == nil || j.Repository == nil {
+		return fmt.Errorf("job or repository not initialized")
+	}
+	if j.Repository.State == nil {
+		return fmt.Errorf("repository state not initialized")
+	}
 	j.Repository.SetWorkStatus(git.Working)
 	// TODO: Better implementation required
 	switch mode := j.JobType; mode {
 	case FetchJob:
-		j.Repository.State.Message = "fetching.."
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "fetching.."
+		}
 		var opts *command.FetchOptions
-		if j.Options != nil {
-			if o, ok := j.Options.(*command.FetchOptions); ok {
-				opts = o
-			} else {
-				// Fallback or error handling if needed, but for now just ignore invalid options
-				// or maybe log it? The original code would panic.
-				// Let's assume if it's not the right type, we treat it as nil options
-				// but maybe we should log it.
-				// For safety, let's just proceed with defaults if cast fails.
-			}
+		switch cfg := j.Options.(type) {
+		case nil:
+			opts = nil
+		case *command.FetchOptions:
+			opts = cfg
+		case command.FetchOptions:
+			opts = &cfg
+		default:
+			opts = nil
 		}
 		if opts == nil {
 			remoteName := "origin"
-			if j.Repository.State.Remote != nil && j.Repository.State.Remote.Name != "" {
+			if j.Repository.State != nil && j.Repository.State.Remote != nil && j.Repository.State.Remote.Name != "" {
 				remoteName = j.Repository.State.Remote.Name
 			}
 			opts = &command.FetchOptions{
@@ -116,7 +123,9 @@ func (j *Job) Start() error {
 			return err
 		}
 	case PullJob:
-		j.Repository.State.Message = "pulling.."
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "pulling.."
+		}
 		var (
 			opts     *command.PullOptions
 			suppress bool
@@ -176,7 +185,9 @@ func (j *Job) Start() error {
 			return err
 		}
 	case MergeJob:
-		j.Repository.State.Message = "merging.."
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "merging.."
+		}
 		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
 			msg := "upstream not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
@@ -204,7 +215,9 @@ func (j *Job) Start() error {
 			return err
 		}
 	case RebaseJob:
-		j.Repository.State.Message = "rebasing.."
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "rebasing.."
+		}
 		if j.Repository.State == nil || j.Repository.State.Branch == nil || j.Repository.State.Branch.Upstream == nil {
 			msg := "upstream not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
@@ -224,10 +237,19 @@ func (j *Job) Start() error {
 			return nil
 		}
 		var opts *command.PullOptions
-		if j.Options != nil {
-			if o, ok := j.Options.(*command.PullOptions); ok {
-				opts = o
-			}
+		switch cfg := j.Options.(type) {
+		case nil:
+			opts = &command.PullOptions{}
+		case *command.PullOptions:
+			opts = cfg
+		case command.PullOptions:
+			opts = &cfg
+		case PullJobConfig:
+			opts = cfg.Options
+		case *PullJobConfig:
+			opts = cfg.Options
+		default:
+			opts = &command.PullOptions{}
 		}
 		if opts == nil {
 			opts = &command.PullOptions{}
@@ -251,7 +273,9 @@ func (j *Job) Start() error {
 			return err
 		}
 	case PushJob:
-		j.Repository.State.Message = "pushing.."
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "pushing.."
+		}
 		if j.Repository.State == nil || j.Repository.State.Remote == nil {
 			msg := "remote not set"
 			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{

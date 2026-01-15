@@ -512,61 +512,30 @@ func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error)
 		return false, fmt.Errorf("upstream reference not set")
 	}
 
-	// First try merge-tree if available (git 2.38+) to check for conflicts between commits
-	out, err := Run(r.AbsPath, "git", []string{"merge-tree", "--write-tree", "HEAD", mergeArg})
+	// Use merge-base to check if HEAD is an ancestor of the upstream reference.
+	// This indicates a fast-forward is possible regardless of working tree state.
+	_, err := Run(r.AbsPath, "git", []string{"merge-base", "--is-ancestor", "HEAD", mergeArg})
 	if err == nil {
-		// merge-tree succeeded, meaning no conflicts between commits
-		// But we still need to check if uncommitted changes would conflict
-		// Fall through to the uncommitted changes check below
-	} else if strings.Contains(out, "CONFLICT") {
-		// merge-tree found conflicts between commits
-		return false, nil
-	}
-
-	// Now check if uncommitted local changes would conflict with the merge
-	// We'll use a careful approach: check if working tree changes conflict with what the merge would do
-
-	// Get the list of files that have uncommitted changes
-	statusOut, err := Run(r.AbsPath, "git", []string{"status", "--porcelain"})
-	if err != nil {
-		return false, fmt.Errorf("failed to get status: %w", err)
-	}
-
-	hasUncommittedChanges := strings.TrimSpace(statusOut) != ""
-	if !hasUncommittedChanges {
-		// No uncommitted changes, so fast-forward would succeed
 		return true, nil
 	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+			if status.ExitStatus() == 1 {
+				return false, nil
+			}
+		}
+	}
 
-	// Check what files would be modified by the merge
-	diffOut, err := Run(r.AbsPath, "git", []string{"diff", "--name-only", "HEAD", mergeArg})
-	if err != nil {
-		// Can't determine, be conservative
+	// Fall back to merge-tree when merge-base fails unexpectedly.
+	out, err := Run(r.AbsPath, "git", []string{"merge-tree", "--write-tree", "HEAD", mergeArg})
+	if err == nil {
+		return true, nil
+	}
+	if strings.Contains(out, "CONFLICT") {
 		return false, nil
 	}
-
-	mergeWouldModify := make(map[string]bool)
-	for _, file := range strings.Split(strings.TrimSpace(diffOut), "\n") {
-		if file != "" {
-			mergeWouldModify[file] = true
-		}
-	}
-
-	// Check if any of the uncommitted files would be modified by the merge
-	for _, line := range strings.Split(statusOut, "\n") {
-		if len(line) < 4 {
-			continue
-		}
-		file := strings.TrimSpace(line[3:])
-		if mergeWouldModify[file] {
-			// This file has uncommitted changes AND would be modified by the merge
-			// This is a potential conflict
-			return false, nil
-		}
-	}
-
-	// Uncommitted changes don't overlap with what the merge would change
-	return true, nil
+	return false, fmt.Errorf("unable to verify fast-forward: %w", err)
 }
 
 func setRepositoryStatus(r *git.Repository, status git.WorkStatus, message string) {

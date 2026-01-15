@@ -24,10 +24,15 @@ func CreateJobQueue() (jq *Queue) {
 
 // AddJob adds a job to the queue
 func (jq *Queue) AddJob(j *Job) error {
+	if j == nil || j.Repository == nil {
+		return fmt.Errorf("job or repository not initialized")
+	}
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
-
 	for _, job := range jq.series {
+		if job == nil || job.Repository == nil {
+			continue
+		}
 		if job.Repository.RepoID == j.Repository.RepoID && job.JobType == j.JobType {
 			return fmt.Errorf("same job already is in the queue")
 		}
@@ -41,16 +46,18 @@ func (jq *Queue) AddJob(j *Job) error {
 // StartNext starts the next job in the queue
 func (jq *Queue) StartNext() (j *Job, finished bool, err error) {
 	jq.mu.Lock()
-	defer jq.mu.Unlock()
-
-	finished = false
 	if len(jq.series) < 1 {
-		finished = true
-		return nil, finished, nil
+		jq.mu.Unlock()
+		return nil, true, nil
 	}
 	i := len(jq.series) - 1
 	lastJob := jq.series[i]
 	jq.series = jq.series[:i]
+	jq.mu.Unlock()
+
+	if lastJob == nil {
+		return nil, false, fmt.Errorf("unexpected nil job in queue")
+	}
 	if err = lastJob.Start(); err != nil {
 		return lastJob, finished, err
 	}
@@ -59,12 +66,21 @@ func (jq *Queue) StartNext() (j *Job, finished bool, err error) {
 
 // RemoveFromQueue deletes the given entity and its job from the queue
 func (jq *Queue) RemoveFromQueue(r *git.Repository) error {
+	if r == nil {
+		return fmt.Errorf("repository not initialized")
+	}
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
-
 	removed := false
-	for i, job := range jq.series {
+	for i := len(jq.series) - 1; i >= 0; i-- {
+		job := jq.series[i]
+		if job == nil || job.Repository == nil {
+			continue
+		}
 		if job.Repository.RepoID == r.RepoID {
+			if job.Repository.WorkStatus() == git.Working {
+				return fmt.Errorf("cannot remove a job that already started")
+			}
 			jq.series = append(jq.series[:i], jq.series[i+1:]...)
 			removed = true
 		}
@@ -83,7 +99,15 @@ func (jq *Queue) IsInTheQueue(r *git.Repository) (inTheQueue bool, j *Job) {
 	defer jq.mu.Unlock()
 
 	inTheQueue = false
+	if r == nil {
+		return inTheQueue, nil
+	}
+	jq.mu.Lock()
+	defer jq.mu.Unlock()
 	for _, job := range jq.series {
+		if job == nil || job.Repository == nil {
+			continue
+		}
 		if job.Repository.RepoID == r.RepoID {
 			inTheQueue = true
 			j = job

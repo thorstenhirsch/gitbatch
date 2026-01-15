@@ -321,6 +321,20 @@ func (m *Model) handleCredentialPromptKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 		cmd := m.submitCredentialInput()
 		return true, cmd
 	case "tab", "shift+tab":
+		prompt := m.activeCredentialPrompt
+		if prompt == nil {
+			return true, nil
+		}
+		switch m.credentialInputField {
+		case credentialFieldUsername:
+			prompt.username = strings.TrimSpace(m.credentialInputBuffer)
+			m.credentialInputField = credentialFieldPassword
+			m.credentialInputBuffer = prompt.password
+		case credentialFieldPassword:
+			prompt.password = m.credentialInputBuffer
+			m.credentialInputField = credentialFieldUsername
+			m.credentialInputBuffer = prompt.username
+		}
 		return true, nil
 	case "backspace", "ctrl+h":
 		m.backspaceCredentialInput()

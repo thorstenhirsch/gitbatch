@@ -60,7 +60,15 @@ func InitTestRepository(t *testing.T) *TestHelper {
 }
 
 func (h *TestHelper) CleanUp(t *testing.T) {
-	err := os.RemoveAll(filepath.Dir(h.RepoPath))
+	root := filepath.Dir(h.RepoPath)
+	var err error
+	for i := 0; i < 5; i++ {
+		err = os.RemoveAll(root)
+		if err == nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	require.NoError(t, err)
 }
 
