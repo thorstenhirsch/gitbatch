@@ -26,26 +26,6 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestReturn(t *testing.T) {
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Test Failed.")
-	}
-	var tests = []struct {
-		inp1     string
-		inp2     string
-		inp3     []string
-		expected int
-	}{
-		{wd, "foo", []string{}, -1},
-	}
-	for _, test := range tests {
-		if output, _ := Return(test.inp1, test.inp2, test.inp3); output != test.expected {
-			t.Errorf("Test Failed. {%s, %s, %s} inputted, output: %d, expected : %d", test.inp1, test.inp2, test.inp3, output, test.expected)
-		}
-	}
-}
-
 func TestTrimTrailingNewline(t *testing.T) {
 	var tests = []struct {
 		input    string

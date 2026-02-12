@@ -120,27 +120,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.maybeStartInitialStateEvaluation(nil)
 		return m, cmd
 
-	case repositoryLoadedMsg:
-		// This message type is no longer used but kept for compatibility
-		if msg.err != nil {
-			m.err = msg.err
-		}
-		if repo := msg.repo; repo != nil {
-			m.addRepository(repo)
-			if repo.State != nil {
-				repo.State.Message = "waiting"
-			}
-			repo.SetWorkStatus(git.Pending)
-			// Don't notify during batch loading - will be handled by state evaluation
-			if m.cursor >= len(m.repositories) {
-				m.cursor = len(m.repositories) - 1
-				// Ensure we're on a navigable repository
-				m.cursor = m.findNextReadyIndex(m.cursor, -1)
-			}
-		}
-		m.loading = false
-		return m, nil
-
 	case repositoryStateChangedMsg:
 		// Throttle expensive updateJobsRunningFlag() to avoid O(n) iteration on every state change
 		if shouldThrottleCheck(&lastJobsFlagUpdate, 100*time.Millisecond) {
@@ -197,6 +176,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case repoActionResultMsg:
+		if msg.closePanel {
+			m.activatePanel(NonePanel)
+			m.clearSuccessFormatting()
+			return m, nil
+		}
 		m.ensureSelectionWithinBounds(msg.panel)
 		return m, nil
 
@@ -204,12 +188,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		return m, nil
 
-	case autoFetchFailedMsg:
-		m.jobsRunning = false
-		// Auto-fetch failures are recorded on the affected repositories and should
-		// not pollute the global status bar. Leave m.err untouched so the user only
-		// sees errors when focusing the specific repo.
-		return m, nil
 	}
 
 	return m, nil
@@ -572,31 +550,6 @@ func cloneJobWithCredentials(original *job.Job, creds *git.Credentials) *job.Job
 	return clone
 }
 
-func credentialsFromJob(j *job.Job) *git.Credentials {
-	if j == nil {
-		return nil
-	}
-	switch cfg := j.Options.(type) {
-	case *command.FetchOptions:
-		return cfg.Credentials
-	case command.FetchOptions:
-		return cfg.Credentials
-	case *command.PullOptions:
-		return cfg.Credentials
-	case command.PullOptions:
-		return cfg.Credentials
-	case *job.PullJobConfig:
-		if cfg.Options != nil {
-			return cfg.Options.Credentials
-		}
-	case job.PullJobConfig:
-		if cfg.Options != nil {
-			return cfg.Options.Credentials
-		}
-	}
-	return nil
-}
-
 // handleOverviewKeys processes keys in overview mode
 func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -803,7 +756,7 @@ func (m *Model) handleFocusKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // addRepository adds a repository to the model in sorted order
 func (m *Model) addRepository(r *git.Repository) {
 	rs := m.repositories
-	index := sort.Search(len(rs), func(i int) bool { return git.Less(r, rs[i]) })
+	index := sort.Search(len(rs), func(i int) bool { return git.CompareNamesInsensitive(r.Name, rs[i].Name) < 0 })
 	rs = append(rs, &git.Repository{})
 	copy(rs[index+1:], rs[index:])
 	rs[index] = r
@@ -1585,37 +1538,43 @@ func (m *Model) branchViewportSize(total int) int {
 	return m.panelViewportSize(total)
 }
 
-func (m *Model) ensureBranchCursorVisible(total, viewport int) {
+// ensureCursorVisible adjusts cursor and offset pointers so the cursor
+// remains within [0, total) and is visible inside the viewport window.
+func ensureCursorVisible(cursor *int, offset *int, total, viewport int) {
 	if total <= 0 {
-		m.branchCursor = 0
-		m.branchOffset = 0
+		*cursor = 0
+		*offset = 0
 		return
 	}
-	if m.branchCursor < 0 {
-		m.branchCursor = 0
+	if *cursor < 0 {
+		*cursor = 0
 	}
-	if m.branchCursor >= total {
-		m.branchCursor = total - 1
+	if *cursor >= total {
+		*cursor = total - 1
 	}
 	if viewport <= 0 {
-		m.branchOffset = 0
+		*offset = 0
 		return
 	}
-	if m.branchOffset < 0 {
-		m.branchOffset = 0
+	if *offset < 0 {
+		*offset = 0
 	}
 	maxOffset := total - viewport
 	if maxOffset < 0 {
 		maxOffset = 0
 	}
-	if m.branchOffset > maxOffset {
-		m.branchOffset = maxOffset
+	if *offset > maxOffset {
+		*offset = maxOffset
 	}
-	if m.branchCursor < m.branchOffset {
-		m.branchOffset = m.branchCursor
-	} else if m.branchCursor >= m.branchOffset+viewport {
-		m.branchOffset = m.branchCursor - viewport + 1
+	if *cursor < *offset {
+		*offset = *cursor
+	} else if *cursor >= *offset+viewport {
+		*offset = *cursor - viewport + 1
 	}
+}
+
+func (m *Model) ensureBranchCursorVisible(total, viewport int) {
+	ensureCursorVisible(&m.branchCursor, &m.branchOffset, total, viewport)
 }
 
 func (m *Model) remoteViewportSize(total int) int {
@@ -1623,36 +1582,7 @@ func (m *Model) remoteViewportSize(total int) int {
 }
 
 func (m *Model) ensureRemoteCursorVisible(total, viewport int) {
-	if total <= 0 {
-		m.remoteBranchCursor = 0
-		m.remoteOffset = 0
-		return
-	}
-	if m.remoteBranchCursor < 0 {
-		m.remoteBranchCursor = 0
-	}
-	if m.remoteBranchCursor >= total {
-		m.remoteBranchCursor = total - 1
-	}
-	if viewport <= 0 {
-		m.remoteOffset = 0
-		return
-	}
-	if m.remoteOffset < 0 {
-		m.remoteOffset = 0
-	}
-	maxOffset := total - viewport
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if m.remoteOffset > maxOffset {
-		m.remoteOffset = maxOffset
-	}
-	if m.remoteBranchCursor < m.remoteOffset {
-		m.remoteOffset = m.remoteBranchCursor
-	} else if m.remoteBranchCursor >= m.remoteOffset+viewport {
-		m.remoteOffset = m.remoteBranchCursor - viewport + 1
-	}
+	ensureCursorVisible(&m.remoteBranchCursor, &m.remoteOffset, total, viewport)
 }
 
 // cycleMode cycles through available modes
@@ -1885,7 +1815,7 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 		if m.adjustCommitDetailScroll(1) {
 			return m, nil
 		}
-	case "left":
+	case "left", "h":
 		if m.adjustCommitDetailScroll(-1) {
 			return m, nil
 		}
@@ -1898,10 +1828,7 @@ func (m *Model) handleCommitPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "m":
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.resetToCommitCmd(repo, commit, command.ResetMixed)
-	case "h":
-		if m.adjustCommitDetailScroll(-1) {
-			return m, nil
-		}
+	case "H":
 		commit := commits[clampIndex(m.commitCursor, count)]
 		return m, m.resetToCommitCmd(repo, commit, command.ResetHard)
 	}
@@ -2119,7 +2046,7 @@ func (m *Model) checkoutBranchMultiCmd(repos []*git.Repository, branchName strin
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
 			}
 		}
-		return repoActionResultMsg{panel: BranchPanel}
+		return repoActionResultMsg{panel: BranchPanel, closePanel: true}
 	}
 }
 
@@ -2222,7 +2149,7 @@ func (m *Model) checkoutRemoteBranchMultiCmd(repos []*git.Repository, entry remo
 				return errMsg{err: fmt.Errorf("refresh repository %s: %w", repo.Name, err)}
 			}
 		}
-		return repoActionResultMsg{panel: RemotePanel}
+		return repoActionResultMsg{panel: RemotePanel, closePanel: true}
 	}
 }
 
@@ -2287,42 +2214,11 @@ func (m *Model) resetToCommitCmd(repo *git.Repository, commit *git.Commit, reset
 }
 
 func (m *Model) ensureCommitCursorVisible(total, viewport int) {
-	if total <= 0 {
-		m.commitCursor = 0
-		m.commitOffset = 0
-		return
-	}
-	if m.commitCursor < 0 {
-		m.commitCursor = 0
-	}
-	if m.commitCursor >= total {
-		m.commitCursor = total - 1
-	}
 	if viewport <= 0 {
 		viewport = 1
 	}
 	if viewport > total {
 		viewport = total
 	}
-	maxOffset := total - viewport
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
-	if m.commitOffset < 0 {
-		m.commitOffset = 0
-	}
-	if m.commitOffset > maxOffset {
-		m.commitOffset = maxOffset
-	}
-	if m.commitCursor < m.commitOffset {
-		m.commitOffset = m.commitCursor
-	} else if m.commitCursor >= m.commitOffset+viewport {
-		m.commitOffset = m.commitCursor - viewport + 1
-	}
-	if m.commitOffset < 0 {
-		m.commitOffset = 0
-	}
-	if m.commitOffset > maxOffset {
-		m.commitOffset = maxOffset
-	}
+	ensureCursorVisible(&m.commitCursor, &m.commitOffset, total, viewport)
 }

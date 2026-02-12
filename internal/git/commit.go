@@ -168,23 +168,6 @@ func commit(c *object.Commit, t CommitType) *Commit {
 	return commit
 }
 
-// DiffStat Show diff stat
-func (c *Commit) DiffStat(done chan bool) string {
-
-	var str string
-	defer recoverDiff(&str)
-	if c.C == nil {
-		return ""
-	}
-	d, err := c.C.Stats()
-	if err != nil {
-		return ""
-	}
-	str = d.String()
-	done <- true
-	return str
-}
-
 func (c *Commit) String() string {
 	d := "Hash:" + " " + c.Hash
 	d = d + "\n" + "Author:" + " " + c.Author.Name + " <" + c.Author.Email + ">"
@@ -196,8 +179,3 @@ func (c *Commit) String() string {
 	return d
 }
 
-func recoverDiff(str *string) {
-	if r := recover(); r != nil {
-		*str = "diffstat overloaded"
-	}
-}

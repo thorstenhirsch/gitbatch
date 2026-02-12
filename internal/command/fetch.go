@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -14,10 +13,6 @@ import (
 )
 
 const DefaultFetchTimeout = 60 * time.Second
-
-var (
-	fetchTryCount int
-)
 
 // FetchOptions defines the rules for fetch operation
 type FetchOptions struct {
@@ -52,7 +47,6 @@ func FetchWithContext(ctx context.Context, r *git.Repository, o *FetchOptions) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	fetchTryCount = 0
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultFetchTimeout
 	}
@@ -134,8 +128,7 @@ func getFetchMessage(r *git.Repository, ref1, ref2 string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		re := regexp.MustCompile(`\r?\n`)
-		lines := re.Split(out, -1)
+		lines := newlineRegex.Split(out, -1)
 		last := lines[len(lines)-1]
 		if len(last) > 0 {
 			changes := strings.Split(last, ",")

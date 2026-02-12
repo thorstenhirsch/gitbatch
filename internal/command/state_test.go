@@ -14,6 +14,134 @@ import (
 	"github.com/thorstenhirsch/gitbatch/internal/gittest"
 )
 
+// TestApplySuccessState tests the state transitions for each operation type.
+func TestApplySuccessState(t *testing.T) {
+	tests := []struct {
+		name           string
+		outcome        OperationOutcome
+		initialStatus  git.WorkStatus
+		expectedStatus git.WorkStatus
+		expectedMsg    string
+	}{
+		{
+			name:           "fetch sets Available",
+			outcome:        OperationOutcome{Operation: OperationFetch, Message: "1 file changed"},
+			initialStatus:  git.Working,
+			expectedStatus: git.Available,
+			expectedMsg:    "1 file changed",
+		},
+		{
+			name:           "pull sets Success",
+			outcome:        OperationOutcome{Operation: OperationPull, Message: "fast-forward"},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "fast-forward",
+		},
+		{
+			name:           "pull with empty message defaults",
+			outcome:        OperationOutcome{Operation: OperationPull, Message: ""},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "pull completed",
+		},
+		{
+			name:           "pull suppress sets Available",
+			outcome:        OperationOutcome{Operation: OperationPull, SuppressSuccess: true, Message: "ok"},
+			initialStatus:  git.Working,
+			expectedStatus: git.Available,
+			expectedMsg:    "ok",
+		},
+		{
+			name:           "push sets Success",
+			outcome:        OperationOutcome{Operation: OperationPush, Message: "pushed"},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "pushed",
+		},
+		{
+			name:           "push with empty message defaults",
+			outcome:        OperationOutcome{Operation: OperationPush, Message: ""},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "push completed",
+		},
+		{
+			name:           "push suppress sets Available",
+			outcome:        OperationOutcome{Operation: OperationPush, SuppressSuccess: true},
+			initialStatus:  git.Working,
+			expectedStatus: git.Available,
+			expectedMsg:    "push completed",
+		},
+		{
+			name:           "merge sets Success",
+			outcome:        OperationOutcome{Operation: OperationMerge, Message: "merged"},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "merged",
+		},
+		{
+			name:           "merge with empty message defaults",
+			outcome:        OperationOutcome{Operation: OperationMerge, Message: ""},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "merge completed",
+		},
+		{
+			name:           "rebase sets Success",
+			outcome:        OperationOutcome{Operation: OperationRebase, Message: "rebased"},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "rebased",
+		},
+		{
+			name:           "rebase with empty message defaults",
+			outcome:        OperationOutcome{Operation: OperationRebase, Message: ""},
+			initialStatus:  git.Working,
+			expectedStatus: git.Success,
+			expectedMsg:    "rebase completed",
+		},
+		{
+			name:           "default operation sets Available",
+			outcome:        OperationOutcome{Operation: "unknown", Message: "done"},
+			initialStatus:  git.Working,
+			expectedStatus: git.Available,
+			expectedMsg:    "done",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &git.Repository{
+				RepoID: "test",
+				State: &git.RepositoryState{
+					Message: "initial",
+				},
+			}
+			repo.SetWorkStatusSilent(tt.initialStatus)
+
+			applySuccessState(repo, tt.outcome)
+
+			require.Equal(t, tt.expectedStatus, repo.WorkStatus(), "WorkStatus mismatch")
+			require.Equal(t, tt.expectedMsg, repo.State.Message, "Message mismatch")
+		})
+	}
+}
+
+// TestSetAndTrackStatus tests the setAndTrackStatus helper.
+func TestSetAndTrackStatus(t *testing.T) {
+	repo := &git.Repository{
+		RepoID: "test",
+		State:  &git.RepositoryState{},
+	}
+	repo.SetWorkStatusSilent(git.Working)
+
+	changed := setAndTrackStatus(repo, git.Available)
+	require.True(t, changed, "status changed from Working to Available")
+	require.Equal(t, git.Available, repo.WorkStatus())
+
+	changed = setAndTrackStatus(repo, git.Available)
+	require.False(t, changed, "status unchanged when already Available")
+}
+
 // TestApplyCleanliness_CleanWorkingTree_NoIncomingCommits tests the scenario where
 // the working tree is clean and there are no incoming commits from upstream.
 // Expected: Repository should be marked as clean.

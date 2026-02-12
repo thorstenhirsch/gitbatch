@@ -78,7 +78,6 @@ const (
 	NonePanel SidePanelType = iota
 	BranchPanel
 	RemotePanel
-	RemoteBranchPanel
 	CommitPanel
 	StashPanel
 	StatusPanel
@@ -88,7 +87,6 @@ const (
 type Mode struct {
 	ID            ModeID
 	DisplayString string
-	CommandString string
 }
 
 type forcePushPrompt struct {
@@ -120,10 +118,10 @@ const (
 )
 
 var (
-	pullMode   = Mode{ID: PullMode, DisplayString: "Pull | m: switch", CommandString: "pull --ff-only"}
-	mergeMode  = Mode{ID: MergeMode, DisplayString: "Merge | m: switch", CommandString: "merge"}
-	rebaseMode = Mode{ID: RebaseMode, DisplayString: "Rebase | m: switch", CommandString: "pull --rebase"}
-	pushMode   = Mode{ID: PushMode, DisplayString: "Push | m: switch", CommandString: "push"}
+	pullMode   = Mode{ID: PullMode, DisplayString: "Pull | m: switch"}
+	mergeMode  = Mode{ID: MergeMode, DisplayString: "Merge | m: switch"}
+	rebaseMode = Mode{ID: RebaseMode, DisplayString: "Rebase | m: switch"}
+	pushMode   = Mode{ID: PushMode, DisplayString: "Push | m: switch"}
 
 	modes = []Mode{pullMode, mergeMode, rebaseMode, pushMode}
 )
@@ -298,13 +296,6 @@ type repositoriesLoadedMsg struct {
 	repos []*git.Repository
 }
 
-// repositoryLoadedMsg streams repositories as they finish initializing.
-type repositoryLoadedMsg struct {
-	repo      *git.Repository
-	err       error
-	nextIndex int
-}
-
 // repositoryStateChangedMsg notifies the TUI that a repository triggered a RepositoryUpdated event.
 type repositoryStateChangedMsg struct{}
 
@@ -328,12 +319,8 @@ type lazygitClosedMsg struct {
 // jobCompletedMsg is sent when a job completes (success or failure)
 type jobCompletedMsg struct{}
 
-// autoFetchFailedMsg signals non-fatal fetch failures during initial load
-type autoFetchFailedMsg struct {
-	names []string
-}
-
 // repoActionResultMsg is sent when a focus view action updates repository state
 type repoActionResultMsg struct {
-	panel SidePanelType
+	panel      SidePanelType
+	closePanel bool
 }

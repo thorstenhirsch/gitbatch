@@ -296,28 +296,28 @@ func upstreamExistsOnRemoteWithContext(ctx context.Context, r *git.Repository, r
 	return strings.TrimSpace(out) != "", nil
 }
 
+// setAndTrackStatus sets the repository work status and reports whether it changed.
+func setAndTrackStatus(r *git.Repository, status git.WorkStatus) bool {
+	prev := r.WorkStatus()
+	r.SetWorkStatus(status)
+	return prev != r.WorkStatus()
+}
+
 func applySuccessState(r *git.Repository, outcome OperationOutcome) {
 	message := strings.TrimSpace(outcome.Message)
-	prevMessage := ""
-	prevMessage = r.State.Message
+	prevMessage := r.State.Message
 	statusChanged := false
 	notified := false
 
 	switch outcome.Operation {
 	case OperationFetch:
-		prevStatus := r.WorkStatus()
-		r.SetWorkStatus(git.Available)
-		statusChanged = prevStatus != r.WorkStatus()
+		statusChanged = setAndTrackStatus(r, git.Available)
 		r.State.Message = message
 	case OperationPull:
 		if outcome.SuppressSuccess {
-			prevStatus := r.WorkStatus()
-			r.SetWorkStatus(git.Available)
-			statusChanged = prevStatus != r.WorkStatus()
+			statusChanged = setAndTrackStatus(r, git.Available)
 		} else {
-			prevStatus := r.WorkStatus()
-			r.SetWorkStatus(git.Success)
-			statusChanged = prevStatus != r.WorkStatus()
+			statusChanged = setAndTrackStatus(r, git.Success)
 		}
 		if message == "" {
 			r.State.Message = "pull completed"
@@ -325,18 +325,14 @@ func applySuccessState(r *git.Repository, outcome OperationOutcome) {
 			r.State.Message = message
 		}
 	case OperationMerge:
-		prevStatus := r.WorkStatus()
-		r.SetWorkStatus(git.Success)
-		statusChanged = prevStatus != r.WorkStatus()
+		statusChanged = setAndTrackStatus(r, git.Success)
 		if message == "" {
 			r.State.Message = "merge completed"
 		} else {
 			r.State.Message = message
 		}
 	case OperationRebase:
-		prevStatus := r.WorkStatus()
-		r.SetWorkStatus(git.Success)
-		statusChanged = prevStatus != r.WorkStatus()
+		statusChanged = setAndTrackStatus(r, git.Success)
 		if message == "" {
 			r.State.Message = "rebase completed"
 		} else {
@@ -344,13 +340,9 @@ func applySuccessState(r *git.Repository, outcome OperationOutcome) {
 		}
 	case OperationPush:
 		if outcome.SuppressSuccess {
-			prevStatus := r.WorkStatus()
-			r.SetWorkStatus(git.Available)
-			statusChanged = prevStatus != r.WorkStatus()
+			statusChanged = setAndTrackStatus(r, git.Available)
 		} else {
-			prevStatus := r.WorkStatus()
-			r.SetWorkStatus(git.Success)
-			statusChanged = prevStatus != r.WorkStatus()
+			statusChanged = setAndTrackStatus(r, git.Success)
 		}
 		if message == "" {
 			r.State.Message = "push completed"
@@ -358,28 +350,21 @@ func applySuccessState(r *git.Repository, outcome OperationOutcome) {
 			r.State.Message = message
 		}
 	case OperationRefresh:
-		prevStatus := r.WorkStatus()
 		r.State.Message = message
-		if prevStatus != git.Available {
-			r.SetWorkStatus(git.Available)
-			statusChanged = true
+		if r.WorkStatus() != git.Available {
+			statusChanged = setAndTrackStatus(r, git.Available)
 		} else if strings.TrimSpace(prevMessage) != strings.TrimSpace(message) {
 			r.NotifyRepositoryUpdated()
 			notified = true
 		}
 	case OperationStateProbe:
-		// For state probes, don't change the status yet - let applyCleanliness
-		// handle the final status determination after checking for conflicts.
-		// Keep status as Working/Pending so spinner continues during cleanliness check.
 		r.State.Message = message
 		if strings.TrimSpace(prevMessage) != strings.TrimSpace(message) {
 			r.NotifyRepositoryUpdated()
 			notified = true
 		}
 	default:
-		prevStatus := r.WorkStatus()
-		r.SetWorkStatus(git.Available)
-		statusChanged = prevStatus != r.WorkStatus()
+		statusChanged = setAndTrackStatus(r, git.Available)
 		r.State.Message = message
 	}
 

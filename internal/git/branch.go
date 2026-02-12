@@ -268,6 +268,22 @@ func (b *Branch) HasIncomingCommits() bool {
 	return count > 0
 }
 
+// UpstreamBranchName returns the branch name portion of the upstream reference,
+// or falls back to the current branch name. This is used when constructing
+// pull/push reference arguments.
+func UpstreamBranchName(r *Repository) string {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return ""
+	}
+	if r.State.Branch.Upstream != nil && r.State.Branch.Upstream.Name != "" {
+		parts := strings.SplitN(r.State.Branch.Upstream.Name, "/", 2)
+		if len(parts) == 2 && parts[1] != "" {
+			return parts[1]
+		}
+	}
+	return r.State.Branch.Name
+}
+
 // WorkTreeStatus represents the status of the working tree
 type WorkTreeStatus struct {
 	Clean        bool

@@ -402,7 +402,9 @@ func (m *Model) View() string {
 
 	if m.showHelp {
 		help := m.renderHelp()
-		content = lipgloss.JoinVertical(lipgloss.Left, content, help)
+		content = lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, help,
+			lipgloss.WithWhitespaceChars(" "),
+		)
 	}
 
 	if errorBanner != "" {
@@ -1052,7 +1054,7 @@ func (m *Model) renderBranches(r *git.Repository, contentWidth, maxLines int) st
 
 	lines := make([]string, 0, maxLines)
 	instructions := fmt.Sprintf("%s checkout  %s delete",
-		m.styles.KeyBinding.Render("[space]"),
+		m.styles.KeyBinding.Render("[space/c]"),
 		m.styles.KeyBinding.Render("[d]"),
 	)
 	lines = append(lines, padToWidth(instructions, contentWidth))
@@ -1146,7 +1148,7 @@ func (m *Model) renderRemotes(r *git.Repository, contentWidth, maxLines int) str
 
 	lines := make([]string, 0, maxLines)
 	instructions := fmt.Sprintf("%s checkout  %s delete",
-		m.styles.KeyBinding.Render("[space]"),
+		m.styles.KeyBinding.Render("[space/c]"),
 		m.styles.KeyBinding.Render("[d]"),
 	)
 	lines = append(lines, padToWidth(instructions, contentWidth))
@@ -1238,10 +1240,10 @@ func (m *Model) renderCommits(r *git.Repository, contentWidth, maxLines int) str
 
 	lines := make([]string, 0, maxLines)
 	instructions := fmt.Sprintf("%s checkout  %s soft reset  %s mixed reset  %s hard reset",
-		m.styles.KeyBinding.Render("[space]"),
+		m.styles.KeyBinding.Render("[space/c]"),
 		m.styles.KeyBinding.Render("[s]"),
 		m.styles.KeyBinding.Render("[m]"),
-		m.styles.KeyBinding.Render("[h]"),
+		m.styles.KeyBinding.Render("[H]"),
 	)
 	lines = append(lines, padToWidth(instructions, contentWidth))
 
@@ -1505,13 +1507,14 @@ func (m *Model) renderStatusBar() string {
 // renderHelp renders the help screen
 func (m *Model) renderHelp() string {
 	help := `
-Navigation:  ↑/k up   g/Home top        ↓/j down G/End bottom
-             PgUp/Ctrl+B page up        PgDn/Ctrl+F page down
-             Ctrl+U half page up        Ctrl+D half page down
+Navigation:  up/k up   g/Home top        down/j down  G/End bottom
+             PgUp/Ctrl+B page up         PgDn/Ctrl+F  page down
+             Ctrl+U half page up         Ctrl+D half page down
+             left/h scroll left          right/l scroll right
 
-Actions:     Space   toggle queue       Enter   start queue
-			 a       tag all            A       untag all
-             m       cycle mode         Tab     open lazygit
+Actions:     Space   toggle queue        Enter   start queue
+             a       tag all             A       untag all
+             m       cycle mode          Tab     open lazygit
 
 Views:       b  branches    c  commits    r  remotes
              s  status      S  stash      ESC back (from views)
@@ -1522,7 +1525,15 @@ Git:         f  fetch repo   p  pull repo   P  push repo
 Other:       ?  help         q/Ctrl+C  quit
 `
 
-	return m.styles.Help.Render(help)
+	title := m.styles.PanelTitle.Render("Help")
+	body := lipgloss.JoinVertical(lipgloss.Left, title, m.styles.Help.Render(help))
+
+	panelWidth := 68
+	if m.width > 0 && panelWidth > m.width-4 {
+		panelWidth = m.width - 4
+	}
+
+	return m.styles.Panel.Copy().Width(panelWidth).Render(body)
 }
 
 func (m *Model) renderCredentialPrompt() string {

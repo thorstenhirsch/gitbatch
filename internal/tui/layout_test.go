@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -13,15 +15,9 @@ func TestCalculateColumnWidthsDistributesExtraSpace(t *testing.T) {
 	}
 	widths := calculateColumnWidths(60, repos)
 
-	if widths.repo != 25 {
-		t.Fatalf("repo width unexpected: got %d want %d", widths.repo, 25)
-	}
-	if widths.branch != 18 {
-		t.Fatalf("branch width unexpected: got %d want %d", widths.branch, 18)
-	}
-	if widths.commitMsg != 13 {
-		t.Fatalf("commit width unexpected: got %d want %d", widths.commitMsg, 13)
-	}
+	assert.Equal(t, 25, widths.repo, "repo width")
+	assert.Equal(t, 18, widths.branch, "branch width")
+	assert.Equal(t, 13, widths.commitMsg, "commit width")
 }
 
 func TestCalculateColumnWidthsRespectsMinimums(t *testing.T) {
@@ -31,54 +27,36 @@ func TestCalculateColumnWidthsRespectsMinimums(t *testing.T) {
 	totalWidth := 30
 	widths := calculateColumnWidths(totalWidth, repos)
 
-	if widths.branch != 1 {
-		t.Fatalf("branch width unexpected: got %d want %d", widths.branch, 1)
-	}
-	if widths.commitMsg < commitColumnMinWidth {
-		t.Fatalf("commit width below minimum: got %d", widths.commitMsg)
-	}
-	if sum := widths.repo + widths.branch + widths.commitMsg; sum != totalWidth-4 {
-		t.Fatalf("unexpected width sum: got %d want %d", sum, totalWidth-4)
-	}
+	assert.Equal(t, 1, widths.branch, "branch width")
+	require.GreaterOrEqual(t, widths.commitMsg, commitColumnMinWidth, "commit width below minimum")
+	assert.Equal(t, totalWidth-4, widths.repo+widths.branch+widths.commitMsg, "width sum")
 }
 
 func TestCalculateColumnWidthsHandlesNarrowTables(t *testing.T) {
 	widths := calculateColumnWidths(3, nil)
-	if widths.repo != 0 || widths.branch != 0 || widths.commitMsg != 0 {
-		t.Fatalf("expected zero widths for narrow table, got %+v", widths)
-	}
+	assert.Equal(t, 0, widths.repo)
+	assert.Equal(t, 0, widths.branch)
+	assert.Equal(t, 0, widths.commitMsg)
 }
 
 func TestPanelViewportSizeLargeBudget(t *testing.T) {
 	model := Model{height: 20}
-	got := model.panelViewportSize(10)
-	if got != 10 {
-		t.Fatalf("unexpected viewport size: got %d want %d", got, 10)
-	}
+	assert.Equal(t, 10, model.panelViewportSize(10))
 }
 
 func TestPanelViewportSizeMinimalSpace(t *testing.T) {
 	model := Model{height: 8}
-	got := model.panelViewportSize(5)
-	if got != 1 {
-		t.Fatalf("unexpected viewport size: got %d want %d", got, 1)
-	}
+	assert.Equal(t, 1, model.panelViewportSize(5))
 }
 
 func TestPanelViewportSizeNoItems(t *testing.T) {
 	model := Model{height: 12}
-	got := model.panelViewportSize(0)
-	if got != 0 {
-		t.Fatalf("unexpected viewport size: got %d want %d", got, 0)
-	}
+	assert.Equal(t, 0, model.panelViewportSize(0))
 }
 
 func TestPanelViewportSizeClampsToBudget(t *testing.T) {
 	model := Model{height: 10}
-	got := model.panelViewportSize(9)
-	if got != 3 {
-		t.Fatalf("unexpected viewport size: got %d want %d", got, 3)
-	}
+	assert.Equal(t, 3, model.panelViewportSize(9))
 }
 
 func testRepoWithBranch(name, branch string) *git.Repository {

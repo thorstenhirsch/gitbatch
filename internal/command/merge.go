@@ -2,9 +2,7 @@ package command
 
 import (
 	"context"
-	"regexp"
 
-	"github.com/go-git/go-git/v5/plumbing"
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
@@ -50,18 +48,11 @@ func MergeWithContext(ctx context.Context, r *git.Repository, options *MergeOpti
 
 	newref, _ := r.Repo.Head()
 
-	msg, err := getMergeMessage(r, mergeReferenceHash(ref), mergeReferenceHash(newref))
+	msg, err := getMergeMessage(r, referenceHash(ref), referenceHash(newref))
 	if err != nil {
 		msg = "couldn't get stat"
 	}
 	return msg, nil
-}
-
-func mergeReferenceHash(ref *plumbing.Reference) string {
-	if ref == nil {
-		return ""
-	}
-	return ref.Hash().String()
 }
 
 func getMergeMessage(r *git.Repository, ref1, ref2 string) (string, error) {
@@ -73,8 +64,7 @@ func getMergeMessage(r *git.Repository, ref1, ref2 string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		re := regexp.MustCompile(`\r?\n`)
-		lines := re.Split(out, -1)
+		lines := newlineRegex.Split(out, -1)
 		last := lines[len(lines)-1]
 		if len(last) > 0 {
 			msg = lines[len(lines)-1][1:]

@@ -3,13 +3,10 @@ package command
 import (
 	"bytes"
 	"context"
-	"log"
 	"os"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
@@ -66,9 +63,6 @@ func RunWithContextTimeout(ctx context.Context, d string, c string, args []strin
 		cmd.Dir = d
 	}
 	cmd.Env = enrichGitEnv(os.Environ())
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
 	var buf scanningWriter
 	credentialDetected := false
 	buf.callback = func(p []byte) {
@@ -161,42 +155,6 @@ func ensureEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(env, prefix+value)
-}
-
-// Return returns if we supposed to get return value as an int of a command
-// this method can be used. It is practical when you use a command and process a
-// failover according to a specific return code
-func Return(d string, c string, args []string) (int, error) {
-	return ReturnWithContext(context.Background(), d, c, args)
-}
-
-// ReturnWithContext executes a command returning its exit status while honouring context cancellation.
-func ReturnWithContext(ctx context.Context, d string, c string, args []string) (int, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	cmd := exec.CommandContext(ctx, c, args...)
-	if d != "" {
-		cmd.Dir = d
-	}
-	cmd.Env = enrichGitEnv(os.Environ())
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-	if err := cmd.Start(); err != nil {
-		return -1, err
-	}
-	if err := cmd.Wait(); err != nil {
-		if exiterr, ok := err.(*exec.ExitError); ok {
-			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
-				statusCode := status.ExitStatus()
-				return statusCode, err
-			}
-		} else {
-			log.Fatalf("cmd.Wait: %v", err)
-		}
-	}
-	return 0, nil
 }
 
 // trimTrailingNewline removes the trailing new line form a string. this method
