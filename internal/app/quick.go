@@ -2,7 +2,8 @@ package app
 
 import (
 	"fmt"
-	"strings"
+	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -12,13 +13,17 @@ import (
 
 func quick(directories []string, mode string) error {
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.GOMAXPROCS(0)*4)
 	start := time.Now()
 	for _, dir := range directories {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(d string, mode string) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			if err := operate(d, mode); err != nil {
-				fmt.Printf("could not perform %s on %s: %s", mode, d, err)
+				fmt.Fprintf(os.Stderr, "could not perform %s on %s: %s\n", mode, d, err)
+				return
 			}
 			fmt.Printf("%s: successful\n", d)
 		}(dir, mode)
@@ -61,7 +66,7 @@ func operate(directory, mode string) error {
 		msg, err := command.Pull(r, &command.PullOptions{
 			RemoteName:    remoteName,
 			Progress:      true,
-			ReferenceName: branchNameForQuick(r),
+			ReferenceName: git.UpstreamBranchName(r),
 			FFOnly:        true,
 		})
 		if err != nil {
@@ -99,7 +104,7 @@ func operate(directory, mode string) error {
 		msg, err := command.Pull(r, &command.PullOptions{
 			RemoteName:    remoteName,
 			Progress:      true,
-			ReferenceName: branchNameForQuick(r),
+			ReferenceName: git.UpstreamBranchName(r),
 			Rebase:        true,
 		})
 		if err != nil {
@@ -117,7 +122,7 @@ func operate(directory, mode string) error {
 	case "push":
 		msg, err := command.Push(r, &command.PushOptions{
 			RemoteName:    remoteName,
-			ReferenceName: branchNameForQuick(r),
+			ReferenceName: git.UpstreamBranchName(r),
 		})
 		if err != nil {
 			command.ScheduleStateEvaluation(r, command.OperationOutcome{
@@ -135,15 +140,3 @@ func operate(directory, mode string) error {
 	return fmt.Errorf("unsupported mode: %s", mode)
 }
 
-func branchNameForQuick(r *git.Repository) string {
-	if r == nil || r.State == nil || r.State.Branch == nil {
-		return ""
-	}
-	if r.State.Branch.Upstream != nil && r.State.Branch.Upstream.Name != "" {
-		parts := strings.SplitN(r.State.Branch.Upstream.Name, "/", 2)
-		if len(parts) == 2 && parts[1] != "" {
-			return parts[1]
-		}
-	}
-	return r.State.Branch.Name
-}

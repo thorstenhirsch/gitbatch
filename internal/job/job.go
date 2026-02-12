@@ -331,7 +331,7 @@ func ensurePullOptions(opts *command.PullOptions, repo *git.Repository, ffOnly, 
 		opts.RemoteName = remoteName
 	}
 	if opts.ReferenceName == "" {
-		if branch := branchNameForPull(repo); branch != "" {
+		if branch := git.UpstreamBranchName(repo); branch != "" {
 			opts.ReferenceName = branch
 		}
 	}
@@ -361,15 +361,3 @@ func ensurePushOptions(opts *command.PushOptions, repo *git.Repository) *command
 	return opts
 }
 
-func branchNameForPull(repo *git.Repository) string {
-	if repo == nil || repo.State == nil || repo.State.Branch == nil {
-		return ""
-	}
-	if repo.State.Branch.Upstream != nil && repo.State.Branch.Upstream.Name != "" {
-		parts := strings.SplitN(repo.State.Branch.Upstream.Name, "/", 2)
-		if len(parts) == 2 && parts[1] != "" {
-			return parts[1]
-		}
-	}
-	return repo.State.Branch.Name
-}

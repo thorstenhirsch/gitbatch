@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -14,12 +13,6 @@ import (
 	"github.com/go-git/go-git/v5"
 	"golang.org/x/sync/semaphore"
 )
-
-// Reference is the interface for commits, remotes and branches
-type Reference interface {
-	Next() *Reference
-	Previous() *Reference
-}
 
 // Repository is the main entity of the application. The repository name is
 // actually the name of its folder in the host's filesystem. It holds the go-git
@@ -122,10 +115,11 @@ var (
 
 func gitSemaphore() *semaphore.Weighted {
 	gitQueueOnce.Do(func() {
-		// Use the number of CPU cores for optimal performance on different hardware
-		workers := int64(runtime.GOMAXPROCS(0))
-		if workers < 1 {
-			workers = 1
+		// Git operations are I/O-bound (network/disk), so allow more concurrent
+		// operations than CPU cores for better throughput.
+		workers := int64(runtime.GOMAXPROCS(0)) * 4
+		if workers < 4 {
+			workers = 4
 		}
 		gitQueueSemaphore = semaphore.NewWeighted(workers)
 	})
@@ -484,16 +478,6 @@ func (r *Repository) NotifyRepositoryUpdated() {
 
 func (r *Repository) String() string {
 	return r.Name
-}
-
-func Create(dir string) (*Repository, error) {
-	cmd := exec.Command("git", "init")
-	cmd.Dir = dir
-	_, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, err
-	}
-	return InitializeRepo(dir)
 }
 
 // RefreshModTime updates the repository's modification time by checking critical git files.

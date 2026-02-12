@@ -6,6 +6,39 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// CompareNamesInsensitive compares two strings case-insensitively, with
+// case-sensitive tiebreaking for equal lowercase runes.
+// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+func CompareNamesInsensitive(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	max := len(ar)
+	if max > len(br) {
+		max = len(br)
+	}
+	for i := 0; i < max; i++ {
+		la, lb := unicode.ToLower(ar[i]), unicode.ToLower(br[i])
+		if la != lb {
+			if la < lb {
+				return -1
+			}
+			return 1
+		}
+		if ar[i] != br[i] {
+			if ar[i] < br[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	if len(ar) < len(br) {
+		return -1
+	}
+	if len(ar) > len(br) {
+		return 1
+	}
+	return 0
+}
+
 // Alphabetical slice is the re-ordered *Repository slice that sorted according
 // to alphabetical order (A-Z)
 type Alphabetical []*Repository
@@ -18,31 +51,7 @@ func (s Alphabetical) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
 // Less is the interface implementation for Alphabetical sorting function
 func (s Alphabetical) Less(i, j int) bool {
-	iRunes := []rune(s[i].Name)
-	jRunes := []rune(s[j].Name)
-
-	max := len(iRunes)
-	if max > len(jRunes) {
-		max = len(jRunes)
-	}
-
-	for idx := 0; idx < max; idx++ {
-		ir := iRunes[idx]
-		jr := jRunes[idx]
-
-		lir := unicode.ToLower(ir)
-		ljr := unicode.ToLower(jr)
-
-		if lir != ljr {
-			return lir < ljr
-		}
-
-		// the lowercase runes are the same, so compare the original
-		if ir != jr {
-			return ir < jr
-		}
-	}
-	return false
+	return CompareNamesInsensitive(s[i].Name, s[j].Name) < 0
 }
 
 // LastModified slice is the re-ordered *Repository slice that sorted according
@@ -73,33 +82,4 @@ func (s CommitTime) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 // Less is the interface implementation for CommitTime sorting function
 func (s CommitTime) Less(i, j int) bool {
 	return s[i].Author.When.Unix() > s[j].Author.When.Unix()
-}
-
-// Less returns a comparison between to repositories by name
-func Less(ri, rj *Repository) bool {
-	iRunes := []rune(ri.Name)
-	jRunes := []rune(rj.Name)
-
-	max := len(iRunes)
-	if max > len(jRunes) {
-		max = len(jRunes)
-	}
-
-	for idx := 0; idx < max; idx++ {
-		ir := iRunes[idx]
-		jr := jRunes[idx]
-
-		lir := unicode.ToLower(ir)
-		ljr := unicode.ToLower(jr)
-
-		if lir != ljr {
-			return lir < ljr
-		}
-
-		// the lowercase runes are the same, so compare the original
-		if ir != jr {
-			return ir < jr
-		}
-	}
-	return false
 }

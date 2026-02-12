@@ -1,8 +1,5 @@
 package git
 
-import (
-	"unicode"
-)
 
 // File represents the status of a file in an index or work tree
 type File struct {
@@ -50,29 +47,5 @@ func (s FilesAlphabetical) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 
 // Less is the interface implementation for Alphabetical sorting function
 func (s FilesAlphabetical) Less(i, j int) bool {
-	iRunes := []rune(s[i].Name)
-	jRunes := []rune(s[j].Name)
-
-	max := len(iRunes)
-	if max > len(jRunes) {
-		max = len(jRunes)
-	}
-
-	for idx := 0; idx < max; idx++ {
-		ir := iRunes[idx]
-		jr := jRunes[idx]
-
-		lir := unicode.ToLower(ir)
-		ljr := unicode.ToLower(jr)
-
-		if lir != ljr {
-			return lir < ljr
-		}
-
-		// the lowercase runes are the same, so compare the original
-		if ir != jr {
-			return ir < jr
-		}
-	}
-	return false
+	return CompareNamesInsensitive(s[i].Name, s[j].Name) < 0
 }

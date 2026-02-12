@@ -1,6 +1,8 @@
 package command
 
 import (
+	"context"
+
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -28,6 +30,11 @@ func AttachRefreshExecutor(r *git.Repository) {
 		// Run refresh asynchronously to avoid blocking the state queue
 		// This is critical during initial load when many repos refresh simultaneously
 		go func() {
+			if err := git.AcquireGitSemaphore(context.Background()); err != nil {
+				return
+			}
+			defer git.ReleaseGitSemaphore()
+
 			err := r.Refresh()
 			if err != nil {
 				ScheduleStateEvaluation(r, OperationOutcome{

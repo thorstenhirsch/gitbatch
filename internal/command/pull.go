@@ -8,10 +8,6 @@ import (
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
-var (
-	pullTryCount int
-)
-
 // PullOptions defines the rules for pull operation
 type PullOptions struct {
 	// Name of the remote to fetch from. Defaults to origin.
@@ -40,8 +36,6 @@ func Pull(r *git.Repository, o *PullOptions) (string, error) {
 
 // PullWithContext performs pull respecting context cancellation and deadlines.
 func PullWithContext(ctx context.Context, r *git.Repository, o *PullOptions) (string, error) {
-	pullTryCount = 0
-
 	if o == nil {
 		return "", nil
 	}

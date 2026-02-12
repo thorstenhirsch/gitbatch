@@ -17,8 +17,6 @@ const (
 	// ErrAuthorizationFailed is thrown when authorization failed while trying
 	// to authenticate with remote
 	ErrAuthorizationFailed GitError = "authorization failed"
-	// ErrInvalidAuthMethod is thrown when invalid auth method is invoked
-	ErrInvalidAuthMethod GitError = "invalid auth method"
 	// ErrAlreadyUpToDate is thrown when a repository is already up to date
 	// with its src on merge/fetch/pull
 	ErrAlreadyUpToDate GitError = "already up to date"
@@ -61,8 +59,6 @@ const (
 	ErrSSLError GitError = ("ssl certificate problem")
 	// ErrUnclassified is unconsidered error type
 	ErrUnclassified GitError = ("unclassified error")
-	// NoErrIterationHalted is thrown for catching stops in interators
-	NoErrIterationHalted GitError = ("iteration halted")
 )
 
 // gitErrorWithExitCode wraps a GitError with exit code information
@@ -85,17 +81,6 @@ func (e GitError) Error() string {
 
 type exitCoder interface {
 	ExitCode() int
-}
-
-func exitCodeFromError(err error) (int, bool) {
-	if err == nil {
-		return 0, false
-	}
-
-	if coder, ok := err.(exitCoder); ok {
-		return coder.ExitCode(), true
-	}
-	return 0, false
 }
 
 // RequiresCredentials checks if the error indicates that authentication credentials are required

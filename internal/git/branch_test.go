@@ -6,12 +6,71 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNextBranch(t *testing.T) {
-
-}
-
-func TestPreviousBranch(t *testing.T) {
-
+func TestUpstreamBranchName(t *testing.T) {
+	tests := []struct {
+		name string
+		repo *Repository
+		want string
+	}{
+		{
+			name: "nil repo",
+			repo: nil,
+			want: "",
+		},
+		{
+			name: "nil state",
+			repo: &Repository{State: nil},
+			want: "",
+		},
+		{
+			name: "nil branch",
+			repo: &Repository{State: &RepositoryState{}},
+			want: "",
+		},
+		{
+			name: "no upstream falls back to branch name",
+			repo: &Repository{State: &RepositoryState{
+				Branch: &Branch{Name: "main"},
+			}},
+			want: "main",
+		},
+		{
+			name: "upstream with remote/branch format",
+			repo: &Repository{State: &RepositoryState{
+				Branch: &Branch{
+					Name:     "main",
+					Upstream: &RemoteBranch{Name: "origin/main"},
+				},
+			}},
+			want: "main",
+		},
+		{
+			name: "upstream with nested branch name",
+			repo: &Repository{State: &RepositoryState{
+				Branch: &Branch{
+					Name:     "feature/test",
+					Upstream: &RemoteBranch{Name: "origin/feature/test"},
+				},
+			}},
+			want: "feature/test",
+		},
+		{
+			name: "upstream with empty name falls back to branch name",
+			repo: &Repository{State: &RepositoryState{
+				Branch: &Branch{
+					Name:     "develop",
+					Upstream: &RemoteBranch{Name: ""},
+				},
+			}},
+			want: "develop",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UpstreamBranchName(tt.repo)
+			require.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestRevlistNew(t *testing.T) {
