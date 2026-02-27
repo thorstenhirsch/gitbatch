@@ -160,7 +160,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case jobCompletedMsg:
-		if m.jobsRunning {
+		if m.jobsRunning || m.loading {
 			m.advanceSpinner()
 		}
 
@@ -169,8 +169,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateJobsRunningFlag()
 		}
 
-		// Schedule next tick if jobs are still running
-		if m.jobsRunning {
+		// Keep ticking while loading or jobs are running
+		if m.jobsRunning || m.loading {
 			return m, tickCmd()
 		}
 		return m, nil
@@ -182,6 +182,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.ensureSelectionWithinBounds(msg.panel)
+		return m, nil
+
+	case repoLoadProgressMsg:
+		m.loadedCount = msg.count
+		if m.loading {
+			return m, listenLoadProgressCmd()
+		}
 		return m, nil
 
 	case errMsg:

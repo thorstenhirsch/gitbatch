@@ -356,6 +356,75 @@ func clampLines(lines []string, maxLines int) []string {
 	return lines[:maxLines]
 }
 
+// renderLoadingScreen renders a centered loading screen with a progress bar.
+// It is shown during the initial load when more than loadingScreenThreshold
+// repositories are being discovered.
+func (m *Model) renderLoadingScreen() string {
+	total := len(m.directories)
+	loaded := m.loadedCount
+
+	spinner := spinnerFrames[m.spinnerIndex%len(spinnerFrames)]
+
+	// Progress bar
+	barWidth := 30
+	if m.width > 60 {
+		barWidth = m.width/3
+		if barWidth > 40 {
+			barWidth = 40
+		}
+	}
+
+	filled := 0
+	if total > 0 {
+		filled = loaded * barWidth / total
+	}
+	if filled > barWidth {
+		filled = barWidth
+	}
+
+	bar := "[" +
+		strings.Repeat("█", filled) +
+		strings.Repeat("░", barWidth-filled) +
+		"]"
+
+	counterLine := fmt.Sprintf("%d / %d repositories", loaded, total)
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+		Background(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#7E57C2"}).
+		Padding(0, 2)
+
+	barStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#9575CD"})
+
+	counterStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#424242", Dark: "#BDBDBD"})
+
+	spinnerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#9575CD"}).
+		Bold(true)
+
+	box := lipgloss.JoinVertical(lipgloss.Center,
+		titleStyle.Render("gitbatch"),
+		"",
+		spinnerStyle.Render(spinner)+" Loading repositories...",
+		"",
+		barStyle.Render(bar),
+		counterStyle.Render(counterLine),
+	)
+
+	boxStyled := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.AdaptiveColor{Light: "#7E57C2", Dark: "#9575CD"}).
+		Padding(1, 3).
+		Render(box)
+
+	return lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, boxStyled,
+		lipgloss.WithWhitespaceChars(" "),
+	)
+}
+
 // View renders the UI
 func (m *Model) View() string {
 	if !m.ready {
@@ -381,6 +450,13 @@ func (m *Model) View() string {
 
 	var content string
 	var errorBanner string
+
+	// Show dedicated loading screen when scanning many repositories
+	if m.loading && len(m.directories) > loadingScreenThreshold {
+		content = m.renderLoadingScreen()
+		statusBar := m.renderStatusBar()
+		return lipgloss.JoinVertical(lipgloss.Left, content, statusBar)
+	}
 
 	if m.err != nil {
 		errText := formatErrorForDisplay(m.err)

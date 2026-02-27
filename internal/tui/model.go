@@ -25,6 +25,7 @@ type Model struct {
 	ready                    bool
 	initialStateProbeStarted bool
 	loading                  bool
+	loadedCount              int
 	jobsRunning              bool
 	err                      error
 
@@ -124,6 +125,12 @@ var (
 	pushMode   = Mode{ID: PushMode, DisplayString: "Push | m: switch"}
 
 	modes = []Mode{pullMode, mergeMode, rebaseMode, pushMode}
+)
+
+const (
+	// loadingScreenThreshold is the minimum number of directories needed
+	// to trigger the progress-bar loading screen.
+	loadingScreenThreshold = 10
 )
 
 var spinnerFrames = []string{"|", "/", "-", "\\"}
@@ -284,11 +291,21 @@ func New(mode string, directories []string) *Model {
 
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(loadRepositoriesCmd(m.directories), listenRepositoryUpdatesCmd(), tickCmd())
+	cmds := []tea.Cmd{loadRepositoriesCmd(m.directories), listenRepositoryUpdatesCmd(), tickCmd()}
+	if len(m.directories) > loadingScreenThreshold {
+		cmds = append(cmds, listenLoadProgressCmd())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) terminalTooSmall() bool {
 	return m.width < minTerminalWidth || m.height < minTerminalHeight
+}
+
+// repoLoadProgressMsg is sent each time a repository finishes loading
+// during the initial load phase when > loadingScreenThreshold repos are found.
+type repoLoadProgressMsg struct {
+	count int
 }
 
 // repositoriesLoadedMsg is sent when all repositories are loaded

@@ -12,12 +12,22 @@ import (
 // slice of paths. since this job is done parallel, the order of the directories
 // is not kept
 func SyncLoad(directories []string) (entities []*git.Repository, err error) {
+	return SyncLoadWithProgress(directories, nil)
+}
+
+// SyncLoadWithProgress is like SyncLoad but sends the count of loaded
+// repositories (1, 2, 3, …) to progress after each repo is initialized.
+// progress may be nil, in which case no progress is reported.
+func SyncLoadWithProgress(directories []string, progress chan<- int) (entities []*git.Repository, err error) {
 	if len(directories) == 0 {
 		return nil, fmt.Errorf("no directories provided")
 	}
 
 	// Use a worker pool pattern instead of unlimited goroutines
-	maxWorkers := runtime.GOMAXPROCS(0)
+	maxWorkers := runtime.GOMAXPROCS(0) * 4
+	if maxWorkers < 4 {
+		maxWorkers = 4
+	}
 	if len(directories) < maxWorkers {
 		maxWorkers = len(directories)
 	}
@@ -28,7 +38,11 @@ func SyncLoad(directories []string) (entities []*git.Repository, err error) {
 	errors := make(chan error, len(directories))
 
 	// Start workers
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		loaded  int
+	)
 	for w := 0; w < maxWorkers; w++ {
 		wg.Add(1)
 		go func() {
@@ -41,6 +55,18 @@ func SyncLoad(directories []string) (entities []*git.Repository, err error) {
 				}
 				// Initialize modtime
 				entity.RefreshModTime()
+
+				if progress != nil {
+					mu.Lock()
+					loaded++
+					n := loaded
+					mu.Unlock()
+					select {
+					case progress <- n:
+					default:
+					}
+				}
+
 				results <- entity
 			}
 		}()
