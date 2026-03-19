@@ -116,6 +116,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = m.findNextReadyIndex(m.cursor, -1)
 		}
 		m.loading = false
+		// Unblock any listener goroutine still waiting on loadProgressCh.
+		select {
+		case loadProgressCh <- 0:
+		default:
+		}
 		// Now that all repos are visible, start the state evaluation
 		cmd := m.maybeStartInitialStateEvaluation(nil)
 		return m, cmd
@@ -160,7 +165,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case jobCompletedMsg:
-		if m.jobsRunning {
+		if m.jobsRunning || m.loading {
 			m.advanceSpinner()
 		}
 
@@ -169,8 +174,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateJobsRunningFlag()
 		}
 
-		// Schedule next tick if jobs are still running
-		if m.jobsRunning {
+		// Keep ticking while loading or jobs are running
+		if m.jobsRunning || m.loading {
 			return m, tickCmd()
 		}
 		return m, nil
@@ -182,6 +187,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.ensureSelectionWithinBounds(msg.panel)
+		return m, nil
+
+	case repoLoadProgressMsg:
+		m.loadedCount = msg.count
+		if m.loading {
+			return m, listenLoadProgressCmd()
+		}
 		return m, nil
 
 	case errMsg:
@@ -796,6 +808,16 @@ func repoIsDirty(repo *git.Repository) bool {
 		return false
 	}
 	return !repo.State.Branch.Clean
+}
+
+func repoHasLocalChanges(repo *git.Repository) bool {
+	if repo == nil {
+		return false
+	}
+	if repo.State == nil || repo.State.Branch == nil {
+		return false
+	}
+	return repo.State.Branch.HasLocalChanges
 }
 
 func repoIsActionable(repo *git.Repository) bool {

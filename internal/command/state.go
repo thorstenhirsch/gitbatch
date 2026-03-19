@@ -20,14 +20,15 @@ func init() {
 type OperationType string
 
 const (
-	OperationFetch      OperationType = "fetch"
-	OperationPull       OperationType = "pull"
-	OperationMerge      OperationType = "merge"
-	OperationRebase     OperationType = "rebase"
-	OperationPush       OperationType = "push"
-	OperationRefresh    OperationType = "refresh"
-	OperationGit        OperationType = "git"
-	OperationStateProbe OperationType = "state-probe"
+	OperationFetch       OperationType = "fetch"
+	OperationPull        OperationType = "pull"
+	OperationMerge       OperationType = "merge"
+	OperationRebase      OperationType = "rebase"
+	OperationPush        OperationType = "push"
+	OperationRefresh     OperationType = "refresh"
+	OperationGit         OperationType = "git"
+	OperationStateProbe  OperationType = "state-probe"
+	OperationNoUpstream  OperationType = "no-upstream"
 )
 
 // OperationOutcome captures the result of an operation for state evaluation.
@@ -69,6 +70,11 @@ func isGitFatalError(err error) bool {
 // It is invoked after auto-fetch, queued jobs, and lazygit refreshes to ensure
 // consistent clean/disabled and error handling across the application.
 func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
+	if outcome.Operation == OperationNoUpstream {
+		r.MarkNoUpstream(outcome.Message)
+		return
+	}
+
 	if outcome.Operation == OperationStateProbe {
 		// Check if this is an initial state probe request (no message/result yet)
 		// vs. a completion (has message or error from the async operation)
@@ -211,13 +217,13 @@ func handleStateProbe(r *git.Repository) {
 
 	upstream := branch.Upstream
 	if upstream == nil {
-		r.MarkCriticalError("upstream not configured")
+		r.MarkNoUpstream("upstream not configured")
 		return
 	}
 
 	remoteName, remoteBranch := resolveUpstreamParts(r, branch)
 	if remoteName == "" || remoteBranch == "" {
-		r.MarkCriticalError("upstream not configured")
+		r.MarkNoUpstream("upstream not configured")
 		return
 	}
 
@@ -383,6 +389,11 @@ func applyCleanlinessAsync(r *git.Repository) {
 		return
 	}
 
+	// Refresh ahead/behind counts before acquiring the semaphore. initBranches()
+	// runs before the initial fetch so Pullables is stale on the first run.
+	// git for-each-ref is read-only and lightweight; no semaphore needed.
+	r.RefreshBranchCounts()
+
 	// Acquire semaphore to limit concurrent git status operations
 	if err := git.AcquireGitSemaphore(context.Background()); err != nil {
 		// If we can't acquire semaphore, we can't check cleanliness safely
@@ -406,14 +417,14 @@ func applyCleanlinessAsync(r *git.Repository) {
 	if branch.HasIncomingCommits() {
 		upstream := branch.Upstream
 		if upstream == nil || upstream.Name == "" {
-			r.MarkCriticalError("upstream not configured")
+			r.MarkNoUpstream("upstream not configured")
 			return
 		}
 
 		// Always check if fast-forward merge would succeed when there are incoming commits
 		mergeArg := upstreamMergeArgument(upstream)
 		if mergeArg == "" {
-			r.MarkCriticalError("upstream not configured")
+			r.MarkNoUpstream("upstream not configured")
 			return
 		}
 
@@ -430,16 +441,20 @@ func applyCleanlinessAsync(r *git.Repository) {
 		}
 
 		if workingTreeClean {
-			// Working tree is clean - fast-forward will succeed
+			// Working tree is clean — fast-forward will succeed.
 			r.MarkClean()
 			if succeeds {
-				// Automatically queue the repo for the current operation since fast-forward will work
-				// This simulates what happens when user presses space on a repo
 				r.SetWorkStatus(git.Queued)
 			}
+		} else if succeeds {
+			// Working tree has local changes, but they don't overlap with the incoming
+			// commits so a fast-forward pull will work fine. Mark with the yellow
+			// "local changes" indicator and still auto-queue.
+			r.MarkLocalChanges()
+			r.SetWorkStatus(git.Queued)
 		} else {
-			// Working tree is NOT clean.
-			// Even if fast-forward is possible, user prefers to treat dirty state as blocking.
+			// Working tree is dirty AND the incoming commits touch the same files.
+			// A pull would fail — show the warning triangle.
 			r.MarkDisabled()
 		}
 		if r.WorkStatus() != git.Available && r.WorkStatus() != git.Queued {
@@ -451,6 +466,8 @@ func applyCleanlinessAsync(r *git.Repository) {
 	// No incoming commits - the branch is up-to-date with upstream.
 	if hasConflicts {
 		r.MarkDisabled()
+	} else if !workingTreeClean {
+		r.MarkLocalChanges()
 	} else {
 		r.MarkClean()
 	}
@@ -497,10 +514,32 @@ func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error)
 		return false, fmt.Errorf("upstream reference not set")
 	}
 
-	// Use merge-base to check if HEAD is an ancestor of the upstream reference.
-	// This indicates a fast-forward is possible regardless of working tree state.
-	_, err := Run(r.AbsPath, "git", []string{"merge-base", "--is-ancestor", "HEAD", mergeArg})
-	if err == nil {
+	// Check whether this is a pure fast-forward (HEAD is an ancestor of the upstream).
+	// If so, no 3-way merge is needed and commit conflicts are impossible.
+	_, ancestorErr := Run(r.AbsPath, "git", []string{"merge-base", "--is-ancestor", "HEAD", mergeArg})
+	if ancestorErr != nil {
+		// HEAD is not an ancestor of upstream (branches diverged) or the check failed.
+		// Use merge-tree to detect commit-level conflicts.
+		out, err := Run(r.AbsPath, "git", []string{"merge-tree", "--write-tree", "HEAD", mergeArg})
+		if err != nil {
+			// merge-tree exits non-zero on conflicts or when the flag is unsupported.
+			// Either way we can't safely merge without manual intervention.
+			return false, nil
+		}
+		if strings.Contains(out, "CONFLICT") {
+			return false, nil
+		}
+		// merge-tree succeeded with no conflicts; fall through to file-overlap check.
+	}
+
+	// Check if uncommitted local changes overlap with files the incoming commits touch.
+	statusOut, err := Run(r.AbsPath, "git", []string{"status", "--porcelain"})
+	if err != nil {
+		return false, fmt.Errorf("failed to get status: %w", err)
+	}
+
+	if strings.TrimSpace(statusOut) == "" {
+		// Clean working tree — fast-forward will succeed.
 		return true, nil
 	}
 	var exitErr *exec.ExitError
@@ -512,15 +551,34 @@ func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error)
 		}
 	}
 
-	// Fall back to merge-tree when merge-base fails unexpectedly.
-	out, err := Run(r.AbsPath, "git", []string{"merge-tree", "--write-tree", "HEAD", mergeArg})
-	if err == nil {
-		return true, nil
-	}
-	if strings.Contains(out, "CONFLICT") {
+	// Determine which files the incoming commits would update.
+	diffOut, err := Run(r.AbsPath, "git", []string{"diff", "--name-only", "HEAD", mergeArg})
+	if err != nil {
+		// Can't determine overlap — be conservative.
 		return false, nil
 	}
-	return false, fmt.Errorf("unable to verify fast-forward: %w", err)
+
+	incomingFiles := make(map[string]bool)
+	for _, file := range strings.Split(strings.TrimSpace(diffOut), "\n") {
+		if file != "" {
+			incomingFiles[file] = true
+		}
+	}
+
+	// If any locally modified file would also be touched by the incoming commits,
+	// a fast-forward checkout would refuse to overwrite it.
+	for _, line := range strings.Split(statusOut, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		file := strings.TrimSpace(line[3:])
+		if incomingFiles[file] {
+			return false, nil
+		}
+	}
+
+	// Local changes don't overlap with incoming changes — fast-forward is safe.
+	return true, nil
 }
 
 func setRepositoryStatus(r *git.Repository, status git.WorkStatus, message string) {

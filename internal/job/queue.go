@@ -10,15 +10,20 @@ import (
 // Queue holds the slice of Jobs
 type Queue struct {
 	series []*Job
+	index  map[string]*Job
 	mu     sync.Mutex
+}
+
+func jobKey(repoID string, jobType Type) string {
+	return repoID + ":" + string(jobType)
 }
 
 // CreateJobQueue creates a jobqueue struct and initialize its slice then return
 // its pointer
 func CreateJobQueue() (jq *Queue) {
-	s := make([]*Job, 0)
 	return &Queue{
-		series: s,
+		series: make([]*Job, 0),
+		index:  make(map[string]*Job),
 	}
 }
 
@@ -29,17 +34,13 @@ func (jq *Queue) AddJob(j *Job) error {
 	}
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
-	for _, job := range jq.series {
-		if job == nil || job.Repository == nil {
-			continue
-		}
-		if job.Repository.RepoID == j.Repository.RepoID && job.JobType == j.JobType {
-			return fmt.Errorf("same job already is in the queue")
-		}
+
+	key := jobKey(j.Repository.RepoID, j.JobType)
+	if _, exists := jq.index[key]; exists {
+		return fmt.Errorf("same job already is in the queue")
 	}
-	jq.series = append(jq.series, nil)
-	copy(jq.series[1:], jq.series[0:])
-	jq.series[0] = j
+	jq.series = append(jq.series, j)
+	jq.index[key] = j
 	return nil
 }
 
@@ -53,11 +54,8 @@ func (jq *Queue) StartNext() (j *Job, finished bool, err error) {
 	i := len(jq.series) - 1
 	lastJob := jq.series[i]
 	jq.series = jq.series[:i]
-	jq.mu.Unlock()
-
-	if lastJob == nil {
-		return nil, false, fmt.Errorf("unexpected nil job in queue")
-	}
+	key := jobKey(lastJob.Repository.RepoID, lastJob.JobType)
+	delete(jq.index, key)
 	if err = lastJob.Start(); err != nil {
 		return lastJob, finished, err
 	}
@@ -72,19 +70,17 @@ func (jq *Queue) RemoveFromQueue(r *git.Repository) error {
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
 	removed := false
-	for i := len(jq.series) - 1; i >= 0; i-- {
-		job := jq.series[i]
-		if job == nil || job.Repository == nil {
-			continue
-		}
+	newSeries := jq.series[:0]
+	for _, job := range jq.series {
 		if job.Repository.RepoID == r.RepoID {
-			if job.Repository.WorkStatus() == git.Working {
-				return fmt.Errorf("cannot remove a job that already started")
-			}
-			jq.series = append(jq.series[:i], jq.series[i+1:]...)
+			key := jobKey(job.Repository.RepoID, job.JobType)
+			delete(jq.index, key)
 			removed = true
+		} else {
+			newSeries = append(newSeries, job)
 		}
 	}
+	jq.series = newSeries
 	if !removed {
 		return fmt.Errorf("there is no job with given repoID")
 	}
@@ -98,22 +94,12 @@ func (jq *Queue) IsInTheQueue(r *git.Repository) (inTheQueue bool, j *Job) {
 	jq.mu.Lock()
 	defer jq.mu.Unlock()
 
-	inTheQueue = false
-	if r == nil {
-		return inTheQueue, nil
-	}
-	jq.mu.Lock()
-	defer jq.mu.Unlock()
-	for _, job := range jq.series {
-		if job == nil || job.Repository == nil {
-			continue
-		}
+	for _, job := range jq.index {
 		if job.Repository.RepoID == r.RepoID {
-			inTheQueue = true
-			j = job
+			return true, job
 		}
 	}
-	return inTheQueue, j
+	return false, nil
 }
 
 // StartJobsAsync starts all jobs in the queue asynchronously.

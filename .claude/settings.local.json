@@ -7,7 +7,13 @@
       "Bash(find:*)",
       "Bash(go vet:*)",
       "Bash(git stash:*)",
-      "Bash(git stash pop:*)"
+      "Bash(git stash pop:*)",
+      "Bash(grep:*)",
+      "Read(//private/tmp/**)",
+      "Bash(unzip -o /Users/torti/src/gitbatch/internal/testlib/test-data-master.zip -d test-data-extract)",
+      "Read(//tmp/test-data-extract/test-data/.git/**)",
+      "Bash(rm -rf /tmp/test-data-extract)",
+      "Bash(unzip -l internal/testlib/test-data-master.zip)"
     ]
   }
 }
