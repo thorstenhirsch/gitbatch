@@ -38,8 +38,10 @@ func TestDebugFetchJob(t *testing.T) {
 	}()
 
 	require.NoError(t, command.ScheduleRepositoryRefresh(repo, nil))
-	time.Sleep(150 * time.Millisecond) // Wait for async refresh operation
-	require.Nil(t, repo.State.Branch.Upstream)
+	require.Eventually(t, func() bool {
+		return repo.State.Branch.Upstream == nil
+	}, 3*time.Second, 25*time.Millisecond, "upstream should become nil after refresh")
+
 
 	job := &Job{JobType: FetchJob, Repository: repo}
 	require.NoError(t, job.Start())

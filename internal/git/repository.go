@@ -41,6 +41,7 @@ type RepositoryState struct {
 	Remote              *Remote
 	Message             string
 	RequiresCredentials bool
+	NoUpstream          bool
 }
 
 // RepositoryListener is a type for listeners
@@ -209,8 +210,13 @@ func InitializeRepo(dir string) (r *Repository, err error) {
 // loadComponents initializes the fields of a repository such as branches,
 // remotes, commits etc. If reset, reload commit, remote pointers too
 func (r *Repository) loadComponents(reset bool) error {
+	// initRemotes must complete before initBranches: branch upstream lookup
+	// reads r.Remotes, so running them concurrently causes a race where
+	// initBranches finds r.Remotes empty and sets Upstream = nil.
+	if err := r.initRemotes(); err != nil {
+		return err
+	}
 	var eg errgroup.Group
-	eg.Go(r.initRemotes)
 	eg.Go(r.initBranches)
 	eg.Go(r.loadStashedItems)
 	return eg.Wait()

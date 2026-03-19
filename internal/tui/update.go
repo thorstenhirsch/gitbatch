@@ -116,6 +116,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = m.findNextReadyIndex(m.cursor, -1)
 		}
 		m.loading = false
+		// Unblock any listener goroutine still waiting on loadProgressCh.
+		select {
+		case loadProgressCh <- 0:
+		default:
+		}
 		// Now that all repos are visible, start the state evaluation
 		cmd := m.maybeStartInitialStateEvaluation(nil)
 		return m, cmd
@@ -789,6 +794,16 @@ func repoIsDirty(repo *git.Repository) bool {
 		return false
 	}
 	return !repo.State.Branch.Clean
+}
+
+func repoHasLocalChanges(repo *git.Repository) bool {
+	if repo == nil {
+		return false
+	}
+	if repo.State == nil || repo.State.Branch == nil {
+		return false
+	}
+	return repo.State.Branch.HasLocalChanges
 }
 
 func repoIsActionable(repo *git.Repository) bool {

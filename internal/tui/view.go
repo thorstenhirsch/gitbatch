@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	queuedSymbol  = "●"
-	successSymbol = "✓"
-	failSymbol    = "✗"
-	dirtySymbol   = "⚠"
+	queuedSymbol       = "●"
+	successSymbol      = "✓"
+	failSymbol         = "✗"
+	dirtySymbol        = "⚠"
+	localChangesSymbol = "~"
 
 	pullSymbol    = "↓"
 	mergeSymbol   = "↣"
@@ -625,8 +626,10 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	style := m.styles.ListItem
 	status := r.WorkStatus()
 	dirty := repoIsDirty(r)
+	hasLocalChanges := repoHasLocalChanges(r)
 	failed := status == git.Fail
 	requiresCredentials := failed && r.State != nil && r.State.RequiresCredentials
+	noUpstream := failed && r.State != nil && r.State.NoUpstream
 
 	switch status {
 	case git.Pending:
@@ -646,16 +649,27 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		statusIcon = successSymbol
 		style = m.styles.SuccessItem
 	case git.Fail:
-		statusIcon = failSymbol
-		if requiresCredentials {
-			// Requires credentials gets pink styling
+		if noUpstream {
+			if dirty {
+				statusIcon = localChangesSymbol
+			} else {
+				statusIcon = " "
+			}
+			style = m.styles.DisabledItem
+		} else if requiresCredentials {
+			statusIcon = " "
 			style = m.styles.CredentialsItem
 		} else {
+			statusIcon = failSymbol
 			style = m.styles.FailedItem
 		}
 	}
-	// Only show dirty symbol when state evaluation is complete (status.Ready).
+	// Only show local-state symbols when state evaluation is complete (status.Ready).
 	// During evaluation (Working), keep showing the spinner.
+	if hasLocalChanges && !dirty && !failed && status.Ready {
+		statusIcon = localChangesSymbol
+		style = m.styles.LocalChangesItem
+	}
 	if dirty && !failed && status.Ready {
 		statusIcon = dirtySymbol
 		style = m.styles.DisabledItem
@@ -672,7 +686,11 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	repoName := truncateString(r.Name, repoNameWidth)
 	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
-	if dirty && !failed && !selected {
+	if requiresCredentials && !selected {
+		repoColumn = m.styles.CredentialsItem.Render(repoColumn)
+	} else if hasLocalChanges && !dirty && !failed && !selected {
+		repoColumn = m.styles.LocalChangesItem.Render(repoColumn)
+	} else if (dirty && !failed || noUpstream) && !requiresCredentials && !selected {
 		repoColumn = m.styles.DisabledItem.Render(repoColumn)
 	}
 
@@ -682,7 +700,11 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	branchContent := truncateString(branchContent(r), branchContentWidth)
 	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
-	if dirty && !failed && !selected {
+	if requiresCredentials && !selected {
+		branchColumn = m.styles.CredentialsItem.Render(branchColumn)
+	} else if hasLocalChanges && !dirty && !failed && !selected {
+		branchColumn = m.styles.LocalChangesItem.Render(branchColumn)
+	} else if (dirty && !failed || noUpstream) && !requiresCredentials && !selected {
 		branchColumn = m.styles.DisabledItem.Render(branchColumn)
 	}
 
@@ -703,7 +725,11 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	commitContent := visibleCommitContent(fullCommitContent, offset, commitContentWidth)
 	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
-	if dirty && !failed && !selected {
+	if requiresCredentials && !selected {
+		commitColumn = m.styles.CredentialsItem.Render(commitColumn)
+	} else if hasLocalChanges && !dirty && !failed && !selected {
+		commitColumn = m.styles.LocalChangesItem.Render(commitColumn)
+	} else if (dirty && !failed || noUpstream) && !requiresCredentials && !selected {
 		commitColumn = m.styles.DisabledItem.Render(commitColumn)
 	}
 
@@ -711,12 +737,16 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	if selected {
 		var highlight lipgloss.Style
 		switch {
+		case noUpstream:
+			highlight = m.styles.DisabledSelectedItem
 		case requiresCredentials:
 			highlight = m.styles.CredentialsSelectedItem
 		case failed:
 			highlight = m.styles.FailedSelectedItem
 		case dirty:
 			highlight = m.styles.DisabledSelectedItem
+		case hasLocalChanges:
+			highlight = m.styles.LocalChangesSelectedItem
 		default:
 			highlight = m.styles.SelectedItem
 		}
@@ -1471,8 +1501,10 @@ func (m *Model) renderStatusBar() string {
 
 	focusRepo := m.currentRepository()
 	dirty := repoIsDirty(focusRepo)
+	hasLocalChanges := repoHasLocalChanges(focusRepo) && !dirty
 	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
 	requiresCredentials := failed && focusRepo.State != nil && focusRepo.State.RequiresCredentials
+	noUpstream := failed && focusRepo.State != nil && focusRepo.State.NoUpstream
 
 	center := ""
 
@@ -1500,7 +1532,17 @@ func (m *Model) renderStatusBar() string {
 		if hasMessage {
 			message = truncateString(singleLineMessage(focusRepo.State.Message), totalWidth)
 		}
-		if requiresCredentials {
+		if noUpstream {
+			statusBarStyle = m.styles.StatusBarDisabled
+			left = " no upstream"
+			right = "TAB: lazygit"
+			rightWidth = lipgloss.Width(right)
+			maxCenter := totalWidth - lipgloss.Width(left) - rightWidth - 2
+			if maxCenter < 0 {
+				maxCenter = 0
+			}
+			center = truncateString(message, maxCenter)
+		} else if requiresCredentials {
 			statusBarStyle = m.styles.StatusBarCredentials
 			left = " credentials required"
 			right = "enter: provide | TAB: lazygit"
@@ -1533,6 +1575,14 @@ func (m *Model) renderStatusBar() string {
 		left = " repo disabled"
 		center = "Only TAB (lazygit) permitted while working tree is disabled"
 		right = "TAB: lazygit"
+	} else if hasLocalChanges {
+		statusBarStyle = m.styles.StatusBarLocalChanges
+		left = " ~ local changes"
+		if focusRepo != nil && focusRepo.State != nil && focusRepo.State.Branch != nil && focusRepo.State.Branch.HasIncomingCommits() {
+			center = "Uncommitted changes present — pull will fast-forward safely"
+		} else {
+			center = "Uncommitted changes present"
+		}
 	} else if m.err != nil {
 		statusBarStyle = m.styles.StatusBarPush
 		maxCenter := totalWidth - leftWidth - rightWidth - 2

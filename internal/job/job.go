@@ -83,8 +83,14 @@ func (j *Job) Start() error {
 				Timeout:    command.DefaultFetchTimeout,
 			}
 		}
-		if branch := j.Repository.State.Branch; branch != nil && branch.Upstream != nil {
-			if branch.Upstream.Reference == nil {
+		if branch := j.Repository.State.Branch; branch != nil {
+			if branch.Upstream == nil {
+				command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+					Operation: command.OperationNoUpstream,
+					Message:   "upstream not configured",
+				})
+				return nil
+			} else if branch.Upstream.Reference == nil {
 				upstreamName := strings.TrimSpace(branch.Upstream.Name)
 				msg := "upstream missing on remote"
 				if upstreamName != "" {

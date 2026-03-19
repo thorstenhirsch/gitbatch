@@ -146,22 +146,25 @@ type Styles struct {
 	StatusBarRebase         lipgloss.Style
 	StatusBarPush           lipgloss.Style
 	StatusBarDisabled       lipgloss.Style
+	StatusBarLocalChanges   lipgloss.Style
 	StatusBarError          lipgloss.Style
 	Help                    lipgloss.Style
 	List                    lipgloss.Style
 	ListItem                lipgloss.Style
-	CredentialsSelectedItem lipgloss.Style
-	SelectedItem            lipgloss.Style
-	DisabledSelectedItem    lipgloss.Style
-	CommonSelectedItem      lipgloss.Style
-	FailedSelectedItem      lipgloss.Style
-	CredentialsItem         lipgloss.Style
-	QueuedItem              lipgloss.Style
-	PendingItem             lipgloss.Style
-	WorkingItem             lipgloss.Style
-	SuccessItem             lipgloss.Style
-	FailedItem              lipgloss.Style
-	DisabledItem            lipgloss.Style
+	CredentialsSelectedItem  lipgloss.Style
+	SelectedItem             lipgloss.Style
+	DisabledSelectedItem     lipgloss.Style
+	LocalChangesSelectedItem lipgloss.Style
+	CommonSelectedItem       lipgloss.Style
+	FailedSelectedItem       lipgloss.Style
+	CredentialsItem          lipgloss.Style
+	QueuedItem               lipgloss.Style
+	PendingItem              lipgloss.Style
+	WorkingItem              lipgloss.Style
+	SuccessItem              lipgloss.Style
+	FailedItem               lipgloss.Style
+	DisabledItem             lipgloss.Style
+	LocalChangesItem         lipgloss.Style
 	BranchInfo              lipgloss.Style
 	KeyBinding              lipgloss.Style
 	Panel                   lipgloss.Style
@@ -194,6 +197,10 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#F5F5F5"}).
 			Background(lipgloss.AdaptiveColor{Light: "#D7CCC8", Dark: "#4A3728"}).
 			Padding(0, 1),
+		StatusBarLocalChanges: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFF176", Dark: "#F9A825"}).
+			Padding(0, 1),
 		StatusBarError: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
 			Background(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#C62828"}).
@@ -203,8 +210,8 @@ func DefaultStyles() *Styles {
 			Background(lipgloss.AdaptiveColor{Light: "#FFF59D", Dark: "#FDD835"}).
 			Padding(0, 1),
 		StatusBarCredentials: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#FFF3E0"}).
-			Background(lipgloss.AdaptiveColor{Light: "#FFE0B2", Dark: "#FB8C00"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#7E57C2"}).
 			Padding(0, 1),
 		Help: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#757575", Dark: "#9E9E9E"}),
@@ -227,8 +234,8 @@ func DefaultStyles() *Styles {
 			Background(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#C62828"}).
 			Bold(true),
 		CredentialsSelectedItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#3E2723", Dark: "#FFF3E0"}).
-			Background(lipgloss.AdaptiveColor{Light: "#FFCC80", Dark: "#FB8C00"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+			Background(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#7E57C2"}).
 			Bold(true),
 		QueuedItem: lipgloss.NewStyle().
 			Foreground(tagHighlightColor),
@@ -241,9 +248,15 @@ func DefaultStyles() *Styles {
 		FailedItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#D32F2F", Dark: "#E57373"}),
 		CredentialsItem: lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#EF6C00", Dark: "#FFA726"}),
+			Foreground(lipgloss.AdaptiveColor{Light: "#5E35B1", Dark: "#9575CD"}),
 		DisabledItem: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#4A3728", Dark: "#9A7B4F"}),
+		LocalChangesItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#E65100", Dark: "#FFD54F"}),
+		LocalChangesSelectedItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
+			Background(lipgloss.AdaptiveColor{Light: "#FFF176", Dark: "#F9A825"}).
+			Bold(true),
 		BranchInfo: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#00796B", Dark: "#4DB6AC"}),
 		KeyBinding: lipgloss.NewStyle().

@@ -20,14 +20,15 @@ var trackRegex = regexp.MustCompile(`\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\
 // branchs' upstream. It also tracks if the repository has unstaged or uncommit-
 // ed changes
 type Branch struct {
-	Name      string
-	Reference *plumbing.Reference
-	Upstream  *RemoteBranch
-	Commits   []*Commit
-	State     *BranchState
-	Pushables string
-	Pullables string
-	Clean     bool
+	Name            string
+	Reference       *plumbing.Reference
+	Upstream        *RemoteBranch
+	Commits         []*Commit
+	State           *BranchState
+	Pushables       string
+	Pullables       string
+	Clean           bool
+	HasLocalChanges bool // working tree is dirty but incoming pull can still fast-forward safely
 }
 
 // BranchState hold the ref commit
@@ -163,6 +164,63 @@ func (r *Repository) initBranches() error {
 
 	r.Branches = lbs
 	return nil
+}
+
+// RefreshBranchCounts re-runs git for-each-ref to update Pullables and Pushables
+// on the current branch. initBranches() runs before the initial fetch, so its
+// ahead/behind counts are stale; calling this after a fetch fixes that.
+func (r *Repository) RefreshBranchCounts() {
+	if r.State == nil || r.State.Branch == nil {
+		return
+	}
+	branch := r.State.Branch
+
+	args := []string{
+		"for-each-ref",
+		"--format=%(upstream:track)",
+		"refs/heads/" + branch.Name,
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = r.AbsPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return
+	}
+
+	track := strings.TrimSpace(string(out))
+	if track == "" {
+		return
+	}
+
+	var push, pull string
+	matches := trackRegex.FindStringSubmatch(track)
+	if len(matches) > 0 {
+		if matches[1] != "" {
+			push = matches[1]
+		} else {
+			push = "0"
+		}
+		if matches[2] != "" {
+			pull = matches[2]
+		} else {
+			pull = "0"
+		}
+	} else if track == "[gone]" {
+		push = "?"
+		pull = "?"
+	} else {
+		return
+	}
+
+	branch.Pushables = push
+	branch.Pullables = pull
+	for _, b := range r.Branches {
+		if b != nil && b.Name == branch.Name {
+			b.Pushables = push
+			b.Pullables = pull
+			break
+		}
+	}
 }
 
 // Checkout to given branch. If any errors occur, the method returns it instead

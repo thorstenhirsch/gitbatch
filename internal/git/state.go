@@ -13,24 +13,49 @@ func (r *Repository) MarkDisabled() {
 		return
 	}
 
+	r.State.NoUpstream = false
 	r.State.Branch.Clean = false
+	r.State.Branch.HasLocalChanges = false
 	for _, candidate := range r.Branches {
 		if candidate != nil && candidate.Name == r.State.Branch.Name {
 			candidate.Clean = false
+			candidate.HasLocalChanges = false
 		}
 	}
 }
 
-// MarkClean updates the current branch as clean.
+// MarkClean updates the current branch as clean with no local changes.
 func (r *Repository) MarkClean() {
 	if r == nil || r.State == nil || r.State.Branch == nil {
 		return
 	}
 
+	r.State.NoUpstream = false
 	r.State.Branch.Clean = true
+	r.State.Branch.HasLocalChanges = false
 	for _, candidate := range r.Branches {
 		if candidate != nil && candidate.Name == r.State.Branch.Name {
 			candidate.Clean = true
+			candidate.HasLocalChanges = false
+		}
+	}
+}
+
+// MarkLocalChanges marks the branch as having local uncommitted changes that
+// don't conflict with an incoming fast-forward pull. The repo remains actionable
+// and is auto-queued for pull just like a clean repo.
+func (r *Repository) MarkLocalChanges() {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return
+	}
+
+	r.State.NoUpstream = false
+	r.State.Branch.Clean = true
+	r.State.Branch.HasLocalChanges = true
+	for _, candidate := range r.Branches {
+		if candidate != nil && candidate.Name == r.State.Branch.Name {
+			candidate.Clean = true
+			candidate.HasLocalChanges = true
 		}
 	}
 }
@@ -38,6 +63,24 @@ func (r *Repository) MarkClean() {
 // MarkCriticalError transitions the repository into a critical error state.
 func (r *Repository) MarkCriticalError(message string) {
 	r.markErrorState(message)
+}
+
+// MarkNoUpstream transitions the repository into a state where the upstream
+// branch is not configured. The repo is not in error; gitbatch simply cannot
+// manage it automatically. Rendered with disabled (brown/grey) coloring, no triangle.
+func (r *Repository) MarkNoUpstream(message string) {
+	if r == nil || r.State == nil {
+		return
+	}
+	r.State.NoUpstream = true
+	r.State.RequiresCredentials = false
+	trimmed := strings.TrimSpace(message)
+	if trimmed != "" {
+		r.State.Message = trimmed
+	} else {
+		r.State.Message = "upstream not configured"
+	}
+	r.SetWorkStatus(Fail)
 }
 
 // MarkRequiresCredentials transitions the repository into a state requiring credentials.
@@ -52,6 +95,7 @@ func (r *Repository) MarkRequiresCredentials(message string) {
 		return
 	}
 	r.State.RequiresCredentials = true
+	r.State.NoUpstream = false
 	trimmed := strings.TrimSpace(message)
 	if trimmed != "" {
 		r.State.Message = trimmed
@@ -70,6 +114,7 @@ func (r *Repository) markErrorState(message string) {
 		return
 	}
 	r.State.RequiresCredentials = false
+	r.State.NoUpstream = false
 	trimmed := strings.TrimSpace(message)
 	if trimmed != "" {
 		r.State.Message = trimmed

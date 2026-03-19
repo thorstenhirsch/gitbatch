@@ -251,7 +251,7 @@ func TestApplyCleanliness_CleanWorkingTree_WithIncomingCommits(t *testing.T) {
 
 // TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits tests the scenario where
 // the working tree has uncommitted changes but there are no incoming commits.
-// Expected: Repository should be marked as clean (up-to-date with upstream).
+// Expected: Repository should be marked with HasLocalChanges=true and remain Available.
 func TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits(t *testing.T) {
 	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
@@ -275,15 +275,16 @@ func TestApplyCleanliness_UncleanWorkingTree_NoIncomingCommits(t *testing.T) {
 	applyCleanliness(repo)
 	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
-	// Verify: should be clean (no incoming commits means up-to-date)
-	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean")
+	// Verify: dirty + no incoming commits → HasLocalChanges=true, Available
+	require.True(t, repo.State.Branch.Clean, "Clean should be true (no blocking conflicts)")
+	require.True(t, repo.State.Branch.HasLocalChanges, "HasLocalChanges should be true")
 	require.Equal(t, git.Available, repo.WorkStatus(), "status should be Available")
 }
 
 // TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds tests the scenario where
 // the working tree has uncommitted changes, there are incoming commits, but fast-forward
 // would succeed (meaning local changes don't conflict with incoming changes).
-// Expected: Repository should be marked as clean.
+// Expected: Repository should be marked clean with HasLocalChanges=true and auto-queued.
 func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testing.T) {
 	th := gittest.InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)
@@ -356,9 +357,10 @@ func TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFSucceeds(t *testi
 	applyCleanliness(repo)
 	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
-	// Verify: should be disabled (dirty state takes precedence over fast-forward)
-	require.False(t, repo.State.Branch.Clean, "repository should be marked as NOT clean - dirty state takes precedence")
-	require.NotEqual(t, git.Queued, repo.WorkStatus(), "status should NOT be Queued")
+	// Verify: dirty + ff-safe → Clean=true, HasLocalChanges=true, auto-queued
+	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean (ff is safe despite local changes)")
+	require.True(t, repo.State.Branch.HasLocalChanges, "HasLocalChanges should be true")
+	require.Equal(t, git.Queued, repo.WorkStatus(), "status should be Queued (auto-queued for ff pull)")
 }
 
 // TestApplyCleanliness_UncleanWorkingTree_IncomingCommits_FFFailsConflict tests the scenario where
@@ -655,9 +657,9 @@ func TestApplyCleanliness_UpstreamNotConfigured(t *testing.T) {
 	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean when no upstream")
 }
 
-// TestApplyCleanliness_UncleanWithIncomingFFSucceeds is a focused test for the specific bug:
-// Unclean working tree + upstream is set and valid + incoming commits + fast-forward succeeds.
-// This should be marked as CLEAN, but was being marked as DISABLED.
+// TestApplyCleanliness_UncleanWithIncomingFFSucceeds tests: unclean working tree + valid upstream
+// + incoming commits that don't conflict + fast-forward succeeds.
+// Expected: marked clean with HasLocalChanges=true and auto-queued.
 func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 	// Create a new temporary directory for this test
 	testDir, err := os.MkdirTemp("", "gitbatch-test")
@@ -757,7 +759,8 @@ func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 	applyCleanliness(repo)
 	time.Sleep(100 * time.Millisecond) // Wait for async operation
 
-	// Verify: should be disabled (dirty state takes precedence over fast-forward)
-	require.False(t, repo.State.Branch.Clean, "repository should be marked as NOT clean - dirty state takes precedence")
-	require.NotEqual(t, git.Queued, repo.WorkStatus(), "status should NOT be Queued")
+	// Verify: dirty + ff-safe → Clean=true, HasLocalChanges=true, auto-queued
+	require.True(t, repo.State.Branch.Clean, "repository should be marked as clean (ff is safe despite local changes)")
+	require.True(t, repo.State.Branch.HasLocalChanges, "HasLocalChanges should be true")
+	require.Equal(t, git.Queued, repo.WorkStatus(), "status should be Queued (auto-queued for ff pull)")
 }
