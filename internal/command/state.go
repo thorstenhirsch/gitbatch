@@ -126,7 +126,8 @@ func EvaluateRepositoryState(r *git.Repository, outcome OperationOutcome) {
 
 	applySuccessState(r, outcome)
 
-	// If we just refreshed a repository, trigger a state probe to verify if the error persists.
+	// If we just refreshed a repository (via an explicit panel operation such as
+	// branch checkout), trigger a state probe to re-verify remote state.
 	if outcome.Operation == OperationRefresh {
 		handleStateProbe(r)
 		return
@@ -388,7 +389,6 @@ func applyCleanlinessAsync(r *git.Repository) {
 	if r.State.Branch == nil {
 		return
 	}
-
 	// Refresh ahead/behind counts before acquiring the semaphore. initBranches()
 	// runs before the initial fetch so Pullables is stale on the first run.
 	// git for-each-ref is read-only and lightweight; no semaphore needed.
@@ -414,15 +414,16 @@ func applyCleanlinessAsync(r *git.Repository) {
 	workingTreeClean := status.Clean
 	hasConflicts := status.HasConflicts
 
-	if branch.HasIncomingCommits() {
-		upstream := branch.Upstream
-		if upstream == nil || upstream.Name == "" {
-			r.MarkNoUpstream("upstream not configured")
-			return
-		}
+	// Re-check before mutating state. A concurrent operation (e.g. a FetchJob that
+	// just detected a missing upstream) may have set git.Fail while we were running
+	// git commands. Don't overwrite an explicit terminal error with "clean".
+	if r.WorkStatus() == git.Fail {
+		return
+	}
 
-		// Always check if fast-forward merge would succeed when there are incoming commits
-		mergeArg := upstreamMergeArgument(upstream)
+	if branch.HasIncomingCommits() {
+		// HasIncomingCommits() guarantees Upstream != nil via PullableCount().
+		mergeArg := upstreamMergeArgument(branch.Upstream)
 		if mergeArg == "" {
 			r.MarkNoUpstream("upstream not configured")
 			return
@@ -434,7 +435,7 @@ func applyCleanlinessAsync(r *git.Repository) {
 			setRepositoryStatus(r, git.Working, "checking for conflicts...")
 		}
 
-		succeeds, err := fastForwardDryRunSucceeds(r, mergeArg)
+		succeeds, err := fastForwardDryRunSucceeds(r, mergeArg, workingTreeClean)
 		if err != nil {
 			r.MarkCriticalError(fmt.Sprintf("unable to verify fast-forward: %v", err))
 			return
@@ -509,7 +510,7 @@ func resolveUpstreamParts(r *git.Repository, branch *git.Branch) (string, string
 	return remoteName, remoteBranch
 }
 
-func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error) {
+func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string, workingTreeClean bool) (bool, error) {
 	if mergeArg == "" {
 		return false, fmt.Errorf("upstream reference not set")
 	}
@@ -532,23 +533,9 @@ func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error)
 		// merge-tree succeeded with no conflicts; fall through to file-overlap check.
 	}
 
-	// Check if uncommitted local changes overlap with files the incoming commits touch.
-	statusOut, err := Run(r.AbsPath, "git", []string{"status", "--porcelain"})
-	if err != nil {
-		return false, fmt.Errorf("failed to get status: %w", err)
-	}
-
-	if strings.TrimSpace(statusOut) == "" {
+	if workingTreeClean {
 		// Clean working tree — fast-forward will succeed.
 		return true, nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-			if status.ExitStatus() == 1 {
-				return false, nil
-			}
-		}
 	}
 
 	// Determine which files the incoming commits would update.
@@ -556,6 +543,12 @@ func fastForwardDryRunSucceeds(r *git.Repository, mergeArg string) (bool, error)
 	if err != nil {
 		// Can't determine overlap — be conservative.
 		return false, nil
+	}
+
+	// Re-read the working tree status to get per-file detail for overlap checking.
+	statusOut, err := Run(r.AbsPath, "git", []string{"status", "--porcelain"})
+	if err != nil {
+		return false, fmt.Errorf("failed to get status: %w", err)
 	}
 
 	incomingFiles := make(map[string]bool)

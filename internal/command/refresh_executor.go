@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"strings"
 
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
@@ -45,12 +46,18 @@ func AttachRefreshExecutor(r *git.Repository) {
 			}
 
 			if outcome == nil {
-				message := ""
-				if r.State != nil {
+				// Auto-refresh triggered after a successful pull/merge/push/fetch.
+				// The operation already updated remote-tracking refs, so only a
+				// cleanliness re-check is needed — not another ls-remote + git fetch
+				// (which handleStateProbe would schedule). Routing through
+				// OperationStateProbe completion calls applyCleanliness without
+				// triggering a new remote probe, eliminating the 2–3 s delay.
+				message := " " // non-empty: tells EvaluateRepositoryState this is a completion, not an initial probe
+				if r.State != nil && strings.TrimSpace(r.State.Message) != "" {
 					message = r.State.Message
 				}
 				ScheduleStateEvaluation(r, OperationOutcome{
-					Operation: OperationRefresh,
+					Operation: OperationStateProbe,
 					Message:   message,
 				})
 				return

@@ -111,7 +111,7 @@ func TestDisabledState_UncleanWorkingTree_IncomingCommits_MergeDryRunFails(t *te
 	t.Logf("Manual merge test output: %s", mergeTestOut)
 	t.Logf("Manual merge test error: %v", mergeTestErr)
 
-	ffSucceeds, err := fastForwardDryRunSucceeds(repo, mergeArg)
+	ffSucceeds, err := fastForwardDryRunSucceeds(repo, mergeArg, false)
 	require.NoError(t, err, "fastForwardDryRunSucceeds should not return an error")
 	t.Logf("fastForwardDryRunSucceeds returned: %v", ffSucceeds)
 

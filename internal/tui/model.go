@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -55,6 +56,12 @@ type Model struct {
 
 	// Styles
 	styles *Styles
+
+	// Update throttling — owned by Model so there are no package-level globals
+	repositoryUpdateCh chan struct{}
+	updateMu           sync.Mutex
+	lastUpdateCheck    time.Time
+	lastJobCheck       time.Time
 }
 
 // ViewType represents the current view mode
@@ -288,23 +295,23 @@ func New(mode string, directories []string) *Model {
 	}
 
 	return &Model{
-		directories:         directories,
-		mode:                initialMode,
-		repositories:        make([]*git.Repository, 0),
-		currentView:         OverviewView,
-		sidePanel:           NonePanel,
-		styles:              DefaultStyles(),
-		loading:             true,
-		spinnerIndex:        0,
-		version:             Version,
+		directories:        directories,
+		mode:               initialMode,
+		repositories:       make([]*git.Repository, 0),
+		currentView:        OverviewView,
+		sidePanel:          NonePanel,
+		styles:             DefaultStyles(),
+		loading:            true,
+		version:            Version,
 		commitScrollOffsets: make(map[string]int),
-		commitDetailScroll:  make(map[string]int),
+		commitDetailScroll: make(map[string]int),
+		repositoryUpdateCh: make(chan struct{}, 256),
 	}
 }
 
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{loadRepositoriesCmd(m.directories), listenRepositoryUpdatesCmd(), tickCmd()}
+	cmds := []tea.Cmd{loadRepositoriesCmd(m.directories), m.listenRepositoryUpdatesCmd(), tickCmd()}
 	if len(m.directories) > loadingScreenThreshold {
 		cmds = append(cmds, listenLoadProgressCmd())
 	}

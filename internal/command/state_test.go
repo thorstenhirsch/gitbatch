@@ -504,7 +504,7 @@ func TestFastForwardDryRunSucceeds_NoError(t *testing.T) {
 	mergeArg := upstreamMergeArgument(upstream)
 	require.NotEmpty(t, mergeArg)
 
-	succeeds, err := fastForwardDryRunSucceeds(repo, mergeArg)
+	succeeds, err := fastForwardDryRunSucceeds(repo, mergeArg, true)
 	require.NoError(t, err)
 	require.True(t, succeeds, "fast-forward should succeed")
 }
@@ -575,7 +575,7 @@ func TestFastForwardDryRunSucceeds_WouldBeOverwritten(t *testing.T) {
 	mergeArg := upstreamMergeArgument(upstream)
 	require.NotEmpty(t, mergeArg)
 
-	succeeds, err := fastForwardDryRunSucceeds(repo, mergeArg)
+	succeeds, err := fastForwardDryRunSucceeds(repo, mergeArg, false)
 	require.NoError(t, err)
 	require.True(t, succeeds, "should return true when error is 'would be overwritten by merge'")
 }
@@ -751,7 +751,7 @@ func TestApplyCleanliness_UncleanWithIncomingFFSucceeds(t *testing.T) {
 	mergeArg := upstreamMergeArgument(upstream)
 	require.NotEmpty(t, mergeArg, "merge argument should not be empty")
 
-	ffSucceeds, err := fastForwardDryRunSucceeds(repo, mergeArg)
+	ffSucceeds, err := fastForwardDryRunSucceeds(repo, mergeArg, false)
 	require.NoError(t, err)
 	require.True(t, ffSucceeds, "fast-forward should succeed (non-conflicting files)")
 

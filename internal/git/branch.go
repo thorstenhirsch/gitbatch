@@ -15,6 +15,27 @@ import (
 
 var trackRegex = regexp.MustCompile(`\[(?:ahead (\d+))?(?:, )?(?:behind (\d+))?\]`)
 
+// parseTrackingInfo extracts push/pull counts from a git %(upstream:track) string.
+// Returns ("?","?") for [gone], ("0"/"n","0"/"n") for normal, ("","") if unrecognised.
+func parseTrackingInfo(track string) (push, pull string) {
+	matches := trackRegex.FindStringSubmatch(track)
+	if len(matches) > 0 {
+		push = matches[1]
+		if push == "" {
+			push = "0"
+		}
+		pull = matches[2]
+		if pull == "" {
+			pull = "0"
+		}
+		return
+	}
+	if track == "[gone]" {
+		return "?", "?"
+	}
+	return "", ""
+}
+
 // Branch is the wrapper of go-git's Reference struct. In addition to that, it
 // also holds name of the branch, pullable and pushable commit count from the
 // branchs' upstream. It also tracks if the repository has unstaged or uncommit-
@@ -84,30 +105,11 @@ func (r *Repository) initBranches() error {
 
 		var push, pull string
 		if track != "" {
-			matches := trackRegex.FindStringSubmatch(track)
-			if len(matches) > 0 {
-				if matches[1] != "" {
-					push = matches[1]
-				} else {
-					push = "0"
-				}
-				if matches[2] != "" {
-					pull = matches[2]
-				} else {
-					pull = "0"
-				}
-			} else if track == "[gone]" {
-				push = "?"
-				pull = "?"
-			}
+			push, pull = parseTrackingInfo(track)
+		} else if upstreamShort != "" {
+			push, pull = "0", "0"
 		} else {
-			if upstreamShort != "" {
-				push = "0"
-				pull = "0"
-			} else {
-				push = "?"
-				pull = "?"
-			}
+			push, pull = "?", "?"
 		}
 
 		ref := plumbing.NewHashReference(plumbing.ReferenceName(refName), plumbing.NewHash(hash))
@@ -192,23 +194,8 @@ func (r *Repository) RefreshBranchCounts() {
 		return
 	}
 
-	var push, pull string
-	matches := trackRegex.FindStringSubmatch(track)
-	if len(matches) > 0 {
-		if matches[1] != "" {
-			push = matches[1]
-		} else {
-			push = "0"
-		}
-		if matches[2] != "" {
-			pull = matches[2]
-		} else {
-			pull = "0"
-		}
-	} else if track == "[gone]" {
-		push = "?"
-		pull = "?"
-	} else {
+	push, pull := parseTrackingInfo(track)
+	if push == "" {
 		return
 	}
 

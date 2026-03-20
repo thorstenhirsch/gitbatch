@@ -618,6 +618,24 @@ func (m *Model) renderOverview() string {
 	return lipgloss.JoinVertical(lipgloss.Left, title, topBorder, list, bottomBorder)
 }
 
+// applyUnselectedColumnStyle applies the appropriate lipgloss style to a column string
+// when the row is not selected. Selected rows are handled by the highlight block instead.
+func (m *Model) applyUnselectedColumnStyle(col string, selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream bool) string {
+	if selected {
+		return col
+	}
+	if requiresCredentials {
+		return m.styles.CredentialsItem.Render(col)
+	}
+	if hasLocalChanges && !dirty && !failed {
+		return m.styles.LocalChangesItem.Render(col)
+	}
+	if (dirty && !failed || noUpstream) && !requiresCredentials {
+		return m.styles.DisabledItem.Render(col)
+	}
+	return col
+}
+
 // renderRepositoryLine renders a single repository line as a table row
 // Table format: │cursor status repo-name    │ branch-name │ commit tags/message │
 // Example:      │→ ●   example-repo         │  main       │ [v1.0.0] add feature │
@@ -685,28 +703,20 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		repoNameWidth = 0
 	}
 	repoName := truncateString(r.Name, repoNameWidth)
-	repoColumn := fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName)
-	if requiresCredentials && !selected {
-		repoColumn = m.styles.CredentialsItem.Render(repoColumn)
-	} else if hasLocalChanges && !dirty && !failed && !selected {
-		repoColumn = m.styles.LocalChangesItem.Render(repoColumn)
-	} else if (dirty && !failed || noUpstream) && !requiresCredentials && !selected {
-		repoColumn = m.styles.DisabledItem.Render(repoColumn)
-	}
+	repoColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName),
+		selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream,
+	)
 
 	branchContentWidth := colWidths.branch - 1
 	if branchContentWidth < 0 {
 		branchContentWidth = 0
 	}
 	branchContent := truncateString(branchContent(r), branchContentWidth)
-	branchColumn := fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent)
-	if requiresCredentials && !selected {
-		branchColumn = m.styles.CredentialsItem.Render(branchColumn)
-	} else if hasLocalChanges && !dirty && !failed && !selected {
-		branchColumn = m.styles.LocalChangesItem.Render(branchColumn)
-	} else if (dirty && !failed || noUpstream) && !requiresCredentials && !selected {
-		branchColumn = m.styles.DisabledItem.Render(branchColumn)
-	}
+	branchColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent),
+		selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream,
+	)
 
 	commitContentWidth := colWidths.commitMsg - 1
 	if commitContentWidth < 0 {
@@ -724,14 +734,10 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		m.setCommitScrollOffset(r, 0)
 	}
 	commitContent := visibleCommitContent(fullCommitContent, offset, commitContentWidth)
-	commitColumn := fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent)
-	if requiresCredentials && !selected {
-		commitColumn = m.styles.CredentialsItem.Render(commitColumn)
-	} else if hasLocalChanges && !dirty && !failed && !selected {
-		commitColumn = m.styles.LocalChangesItem.Render(commitColumn)
-	} else if (dirty && !failed || noUpstream) && !requiresCredentials && !selected {
-		commitColumn = m.styles.DisabledItem.Render(commitColumn)
-	}
+	commitColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent),
+		selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream,
+	)
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
 	if selected {

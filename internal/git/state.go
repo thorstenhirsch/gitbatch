@@ -6,22 +6,28 @@ import (
 	gerr "github.com/thorstenhirsch/gitbatch/internal/errors"
 )
 
+// syncBranchCleanState propagates clean/hasLocalChanges onto the matching entry
+// in r.Branches so the branch list stays consistent with r.State.Branch.
+func (r *Repository) syncBranchCleanState(clean, hasLocalChanges bool) {
+	for _, candidate := range r.Branches {
+		if candidate != nil && candidate.Name == r.State.Branch.Name {
+			candidate.Clean = clean
+			candidate.HasLocalChanges = hasLocalChanges
+			break
+		}
+	}
+}
+
 // MarkDisabled marks the current branch as having unmerged or unpushed work.
 // This reflects the repository entering a disabled state until reconciled or refreshed.
 func (r *Repository) MarkDisabled() {
 	if r == nil || r.State == nil || r.State.Branch == nil {
 		return
 	}
-
 	r.State.NoUpstream = false
 	r.State.Branch.Clean = false
 	r.State.Branch.HasLocalChanges = false
-	for _, candidate := range r.Branches {
-		if candidate != nil && candidate.Name == r.State.Branch.Name {
-			candidate.Clean = false
-			candidate.HasLocalChanges = false
-		}
-	}
+	r.syncBranchCleanState(false, false)
 }
 
 // MarkClean updates the current branch as clean with no local changes.
@@ -29,16 +35,10 @@ func (r *Repository) MarkClean() {
 	if r == nil || r.State == nil || r.State.Branch == nil {
 		return
 	}
-
 	r.State.NoUpstream = false
 	r.State.Branch.Clean = true
 	r.State.Branch.HasLocalChanges = false
-	for _, candidate := range r.Branches {
-		if candidate != nil && candidate.Name == r.State.Branch.Name {
-			candidate.Clean = true
-			candidate.HasLocalChanges = false
-		}
-	}
+	r.syncBranchCleanState(true, false)
 }
 
 // MarkLocalChanges marks the branch as having local uncommitted changes that
@@ -48,16 +48,10 @@ func (r *Repository) MarkLocalChanges() {
 	if r == nil || r.State == nil || r.State.Branch == nil {
 		return
 	}
-
 	r.State.NoUpstream = false
 	r.State.Branch.Clean = true
 	r.State.Branch.HasLocalChanges = true
-	for _, candidate := range r.Branches {
-		if candidate != nil && candidate.Name == r.State.Branch.Name {
-			candidate.Clean = true
-			candidate.HasLocalChanges = true
-		}
-	}
+	r.syncBranchCleanState(true, true)
 }
 
 // MarkCriticalError transitions the repository into a critical error state.
