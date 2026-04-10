@@ -5,35 +5,34 @@ Managing multiple git repositories is easier than ever. I (*was*) often end up w
 
 Note: This is my AI playing field, so expect weird code.
 
+![gitbatch demo](.github/assets/gitbatch-demo.gif)
+
 ## Installation
 
-Install [latest](https://golang.org/dl/) Golang release.
+Download the latest release artifact from the [GitHub Releases page](https://github.com/thorstenhirsch/gitbatch/releases/latest), then extract and place the binary on your `PATH`.
 
-To install with go, run the following command;
+Typical release artifacts include binaries for `darwin`, `linux`, and `windows`.
+
+Example (macOS/Linux):
 ```bash
-go get github.com/thorstenhirsch/gitbatch/cmd/gitbatch
-```
-or, in Windows 10:
-```bash
-go install github.com/thorstenhirsch/gitbatch/cmd/gitbatch@latest
+# 1) Download the archive for your OS/architecture from the latest release page
+# 2) Extract it
+tar -xzf gitbatch_<version>_<os>_<arch>.tar.gz
+
+# 3) Move binary to PATH
+chmod +x gitbatch
+sudo mv gitbatch /usr/local/bin/gitbatch
 ```
 
-### MacOS using homebrew
-```bash
-brew install gitbatch
-```
-For other options see [installation page](https://github.com/thorstenhirsch/gitbatch/wiki/Installation)
+Windows:
+1. Download the `windows` release artifact from [Releases](https://github.com/thorstenhirsch/gitbatch/releases/latest).
+2. Extract `gitbatch.exe`.
+3. Add its directory to your `PATH`.
 
 ## Use
 run the `gitbatch` command from the parent of your git repositories. For start-up options simply `gitbatch --help`
 
 For more information see the [wiki pages](https://github.com/thorstenhirsch/gitbatch/wiki)
-
-## Further goals
-- improve testing
-- full src-d/go-git integration (*having some performance issues in large repos*)
-  - fetch, config, rev-list, add, reset, commit, status and diff commands are supported but not fully utilized, still using git occasionally
-  - merge, stash are not supported yet by go-git
 
 ## Credits
 - [go-git](https://github.com/src-d/go-git) for git interface (partially)
