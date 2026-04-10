@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/thorstenhirsch/gitbatch/internal/command"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
@@ -175,7 +176,7 @@ func (j *Job) Start() error {
 		optsCopy := *opts
 		req := &command.GitCommandRequest{
 			Key:       fmt.Sprintf("pull:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
-			Timeout:   command.DefaultGitCommandTimeout,
+			Timeout:   dynamicTimeout(j.Repository.State.Branch.PullableCount),
 			Operation: command.OperationPull,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
@@ -206,7 +207,7 @@ func (j *Job) Start() error {
 		optsCopy := command.MergeOptions{BranchName: j.Repository.State.Branch.Upstream.Name}
 		req := &command.GitCommandRequest{
 			Key:       fmt.Sprintf("merge:%s:%s", j.Repository.RepoID, optsCopy.BranchName),
-			Timeout:   command.DefaultGitCommandTimeout,
+			Timeout:   dynamicTimeout(j.Repository.State.Branch.PullableCount),
 			Operation: command.OperationMerge,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.MergeWithContext(ctx, j.Repository, &optsCopy)
@@ -264,7 +265,7 @@ func (j *Job) Start() error {
 		optsCopy := *opts
 		req := &command.GitCommandRequest{
 			Key:       fmt.Sprintf("rebase:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
-			Timeout:   command.DefaultGitCommandTimeout,
+			Timeout:   dynamicTimeout(j.Repository.State.Branch.PullableCount),
 			Operation: command.OperationRebase,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.PullWithContext(ctx, j.Repository, &optsCopy)
@@ -325,7 +326,7 @@ func (j *Job) Start() error {
 		optsCopy := *opts
 		req := &command.GitCommandRequest{
 			Key:       fmt.Sprintf("push:%s:%s", j.Repository.RepoID, optsCopy.RemoteName),
-			Timeout:   command.DefaultGitCommandTimeout,
+			Timeout:   dynamicTimeout(j.Repository.State.Branch.PushableCount),
 			Operation: command.OperationPush,
 			Execute: func(ctx context.Context) command.OperationOutcome {
 				msg, err := command.PushWithContext(ctx, j.Repository, &optsCopy)
@@ -389,5 +390,14 @@ func ensurePushOptions(opts *command.PushOptions, repo *git.Repository) *command
 		opts.ReferenceName = repo.State.Branch.Name
 	}
 	return opts
+}
+
+// dynamicTimeout returns a git command timeout scaled by the given change count.
+// If the count cannot be determined, the default timeout is returned.
+func dynamicTimeout(countFn func() (int, bool)) time.Duration {
+	if count, ok := countFn(); ok {
+		return command.DynamicTimeout(command.DefaultGitCommandTimeout, count)
+	}
+	return command.DefaultGitCommandTimeout
 }
 

@@ -15,6 +15,17 @@ type GitCommandFunc func(ctx context.Context) OperationOutcome
 
 const DefaultGitCommandTimeout = 10 * time.Second
 
+// DynamicTimeout calculates a timeout that scales with the number of changes.
+// For every 100 changes the base timeout is added once more, so the result is
+// base * (1 + changes/100). The returned value is never less than base.
+func DynamicTimeout(base time.Duration, changes int) time.Duration {
+	if changes <= 0 {
+		return base
+	}
+	multiplier := 1 + changes/100
+	return base * time.Duration(multiplier)
+}
+
 // GitCommandRequest encapsulates metadata required by the git queue listener.
 // It declares a timeout enforced by the queue infrastructure.
 type GitCommandRequest struct {

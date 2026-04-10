@@ -293,7 +293,21 @@ func (b *Branch) PullableCount() (int, bool) {
 	if b == nil || b.Upstream == nil {
 		return 0, false
 	}
-	value := strings.TrimSpace(b.Pullables)
+	return parseCountField(b.Pullables)
+}
+
+// PushableCount returns the number of commits available to push along with an indicator
+// specifying whether the count could be determined.
+func (b *Branch) PushableCount() (int, bool) {
+	if b == nil || b.Upstream == nil {
+		return 0, false
+	}
+	return parseCountField(b.Pushables)
+}
+
+// parseCountField parses a pullable/pushable count string into an integer.
+func parseCountField(raw string) (int, bool) {
+	value := strings.TrimSpace(raw)
 	if value == "" || value == "?" {
 		return 0, false
 	}
