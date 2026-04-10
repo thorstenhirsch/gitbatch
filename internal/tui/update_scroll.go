@@ -91,7 +91,9 @@ func (m *Model) ensureCommitCursorVisible(total, viewport int) {
 
 // panelLineBudget returns the number of lines available for panel content.
 func (m *Model) panelLineBudget() int {
-	budget := m.overviewTableBodyHeight() - 3
+	_, maxContentLines := m.popupDimensions()
+	// Reserve lines for: panel title, repo header, blank separator
+	budget := maxContentLines - 3
 	if budget < 0 {
 		budget = 0
 	}
@@ -287,12 +289,8 @@ func (m *Model) resetAllCommitDetailScroll(repo *git.Repository) {
 }
 
 func (m *Model) commitPanelContentWidth() int {
-	repo := m.currentRepository()
-	panelWidth, _, ok := m.sidePanelLayoutDimensions(repo)
-	if panelWidth < panelHorizontalFrame+1 || !ok {
-		panelWidth = m.sidePanelMaxWidth()
-	}
-	contentWidth := panelWidth - panelHorizontalFrame
+	popupWidth, _ := m.popupDimensions()
+	contentWidth := popupWidth - panelHorizontalFrame
 	if contentWidth < 1 {
 		contentWidth = 1
 	}

@@ -40,22 +40,22 @@ func TestCalculateColumnWidthsHandlesNarrowTables(t *testing.T) {
 }
 
 func TestPanelViewportSizeLargeBudget(t *testing.T) {
-	model := Model{height: 20}
+	model := Model{width: 120, height: 30}
 	assert.Equal(t, 10, model.panelViewportSize(10))
 }
 
 func TestPanelViewportSizeMinimalSpace(t *testing.T) {
-	model := Model{height: 8}
+	model := Model{width: 80, height: 12}
 	assert.Equal(t, 1, model.panelViewportSize(5))
 }
 
 func TestPanelViewportSizeNoItems(t *testing.T) {
-	model := Model{height: 12}
+	model := Model{width: 80, height: 20}
 	assert.Equal(t, 0, model.panelViewportSize(0))
 }
 
 func TestPanelViewportSizeClampsToBudget(t *testing.T) {
-	model := Model{height: 10}
+	model := Model{width: 80, height: 15}
 	assert.Equal(t, 3, model.panelViewportSize(9))
 }
 

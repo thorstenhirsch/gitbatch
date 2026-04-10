@@ -25,6 +25,7 @@ const (
 	OperationMerge       OperationType = "merge"
 	OperationRebase      OperationType = "rebase"
 	OperationPush        OperationType = "push"
+	OperationCommit      OperationType = "commit"
 	OperationRefresh     OperationType = "refresh"
 	OperationGit         OperationType = "git"
 	OperationStateProbe  OperationType = "state-probe"

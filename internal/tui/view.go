@@ -84,61 +84,26 @@ func (m *Model) overviewTableWidth() int {
 	return total
 }
 
-func (m *Model) sidePanelMaxWidth() int {
-	base := m.overviewTableWidth()
-	if base <= 0 {
-		return 0
+func (m *Model) popupDimensions() (popupWidth, maxContentLines int) {
+	popupWidth = m.width * 70 / 100
+	if popupWidth > 80 {
+		popupWidth = 80
 	}
-	half := m.width / 2
-	if half > 0 && base > half {
-		base = half
+	if popupWidth < 40 && m.width >= 40 {
+		popupWidth = 40
 	}
-	minWidth := panelHorizontalFrame + 12
-	if minWidth > m.width && m.width > 0 {
-		minWidth = m.width
+	if m.width-4 < popupWidth {
+		popupWidth = m.width - 4
 	}
-	if base < minWidth {
-		base = minWidth
+	if popupWidth < panelHorizontalFrame+1 {
+		popupWidth = panelHorizontalFrame + 1
 	}
-	if base > m.width {
-		base = m.width
-	}
-	return base
-}
 
-func (m *Model) sidePanelTopPadding() int {
-	return m.overviewTitleHeight() + 1
-}
-
-func (m *Model) sidePanelLayoutDimensions(repo *git.Repository) (panelWidth int, gapWidth int, ok bool) {
-	baseWidth := m.sidePanelMaxWidth()
-	if baseWidth < panelHorizontalFrame+1 {
-		return baseWidth, 0, false
+	maxContentLines = (m.height * 70 / 100) - 2
+	if maxContentLines < 5 {
+		maxContentLines = 5
 	}
-	mainWidth := 0
-	if repo != nil {
-		mainInfo := m.renderRepositoryInfo(repo)
-		mainWidth = lipgloss.Width(mainInfo)
-	}
-	if mainWidth < 0 {
-		mainWidth = 0
-	}
-	gapOptions := []int{2, 1, 0}
-	for _, gap := range gapOptions {
-		maxAvailable := m.width - mainWidth - gap
-		if maxAvailable < panelHorizontalFrame+1 {
-			continue
-		}
-		candidate := baseWidth
-		if candidate > maxAvailable {
-			candidate = maxAvailable
-		}
-		if candidate < panelHorizontalFrame+1 {
-			continue
-		}
-		return candidate, gap, true
-	}
-	return baseWidth, 0, false
+	return
 }
 
 func calculateColumnWidths(totalWidth int, repos []*git.Repository) columnWidths {
@@ -471,10 +436,13 @@ func (m *Model) View() string {
 		errorBanner = m.styles.Error.Width(m.width).Render(" " + errText)
 	}
 
-	if m.currentView == OverviewView {
-		content = m.renderOverview()
-	} else {
-		content = m.renderFocus()
+	content = m.renderOverview()
+
+	if m.sidePanel != NonePanel {
+		popup := m.renderPanelPopup()
+		content = lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, popup,
+			lipgloss.WithWhitespaceChars(" "),
+		)
 	}
 
 	if m.showHelp {
@@ -486,6 +454,14 @@ func (m *Model) View() string {
 
 	if errorBanner != "" {
 		content = lipgloss.JoinVertical(lipgloss.Left, errorBanner, content)
+	}
+
+	if m.commitPromptActive {
+		if prompt := m.renderCommitPrompt(); prompt != "" {
+			content = lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, prompt,
+				lipgloss.WithWhitespaceChars(" "),
+			)
+		}
 	}
 
 	if m.activeCredentialPrompt != nil {
@@ -978,85 +954,91 @@ func truncateString(s string, maxLen int) string {
 	return b.String()
 }
 
-// renderFocus renders the focus view with side panel
-func (m *Model) renderFocus() string {
+// renderPanelPopup renders a panel (branches, remotes, status, stash) as a centered popup.
+func (m *Model) renderPanelPopup() string {
 	if len(m.repositories) == 0 {
-		return "No repository selected"
+		return ""
+	}
+
+	popupWidth, maxContentLines := m.popupDimensions()
+	contentWidth := popupWidth - panelHorizontalFrame
+	if contentWidth < 1 {
+		contentWidth = 1
 	}
 
 	r := m.repositories[m.cursor]
 
-	// Main info
-	mainInfo := m.renderRepositoryInfo(r)
-
-	panelWidth, gapWidth, horizontalOK := m.sidePanelLayoutDimensions(r)
-	if panelWidth < panelHorizontalFrame+1 {
-		horizontalOK = false
-	}
-	contentWidth := panelWidth - panelHorizontalFrame
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
-	bodyHeight := m.height - m.overviewTitleHeight() - 1
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
-	mainInfoHeight := lipgloss.Height(mainInfo)
-	padLines := m.sidePanelTopPadding()
-	panelFrameHeight := 3
-	maxLines := bodyHeight - padLines - panelFrameHeight
-	if !horizontalOK {
-		available := bodyHeight - mainInfoHeight - padLines - panelFrameHeight
-		if available < maxLines {
-			maxLines = available
+	// Build header with repo info
+	var header []string
+	tagged := m.taggedRepositories()
+	if len(tagged) > 1 {
+		header = append(header, fmt.Sprintf("%d tagged repositories", len(tagged)))
+	} else {
+		repoName := r.Name
+		if r.State != nil && r.State.Branch != nil {
+			repoName += "  " + m.styles.BranchInfo.Render(r.State.Branch.Name)
+			if r.State.Branch.Upstream != nil {
+				repoName += " → " + m.styles.BranchInfo.Render(r.State.Branch.Upstream.Name)
+			}
 		}
-	}
-	if maxLines < 1 {
-		maxLines = 1
+		header = append(header, repoName)
 	}
 
-	// Side panel
-	var panelContent string
+	// Panel title
 	var panelTitle string
-
 	switch m.sidePanel {
 	case BranchPanel:
-		if m.hasMultipleTagged() {
+		if len(tagged) > 1 {
 			panelTitle = "Common Branches"
 		} else {
 			panelTitle = "Branches"
 		}
-		panelContent = m.renderBranches(r, contentWidth, maxLines)
 	case RemotePanel:
-		if m.hasMultipleTagged() {
+		if len(tagged) > 1 {
 			panelTitle = "Common Remote Branches"
 		} else {
 			panelTitle = "Remotes"
 		}
-		panelContent = m.renderRemotes(r, contentWidth, maxLines)
-	case CommitPanel:
-		panelTitle = "Commits"
-		panelContent = m.renderCommits(r, contentWidth, maxLines)
 	case StatusPanel:
 		panelTitle = "Status"
-		panelContent = m.renderStatus(r, contentWidth, maxLines)
 	case StashPanel:
 		panelTitle = "Stash"
-		panelContent = m.renderStash(r, contentWidth, maxLines)
 	default:
-		return mainInfo
+		return ""
 	}
 
-	panel := lipgloss.JoinVertical(lipgloss.Left,
+	// Reserve lines for header (header lines + blank separator + title)
+	headerLines := len(header) + 2 // header + blank + title already in panelContent
+	maxLines := maxContentLines - headerLines
+	if maxLines < 1 {
+		maxLines = 1
+	}
+
+	// Render panel content
+	var panelContent string
+	switch m.sidePanel {
+	case BranchPanel:
+		panelContent = m.renderBranches(r, contentWidth, maxLines)
+	case RemotePanel:
+		panelContent = m.renderRemotes(r, contentWidth, maxLines)
+	case StatusPanel:
+		panelContent = m.renderStatus(r, contentWidth, maxLines)
+	case StashPanel:
+		panelContent = m.renderStash(r, contentWidth, maxLines)
+	}
+
+	// Assemble popup content
+	parts := []string{
 		m.styles.PanelTitle.Render(panelTitle),
+		strings.Join(header, "\n"),
+		"",
 		panelContent,
-	)
-
-	panelStyle := m.styles.Panel.Copy()
-	if panelWidth > 0 {
-		panelStyle = panelStyle.Width(panelWidth)
 	}
-	if (m.sidePanel == BranchPanel || m.sidePanel == RemotePanel) && m.hasMultipleTagged() {
+	panel := lipgloss.JoinVertical(lipgloss.Left, parts...)
+
+	// Style the panel
+	panelStyle := m.styles.Panel.Width(popupWidth)
+	if (m.sidePanel == BranchPanel || m.sidePanel == RemotePanel) && len(tagged) > 1 {
 		var panelHasItems bool
 		switch m.sidePanel {
 		case BranchPanel:
@@ -1069,58 +1051,7 @@ func (m *Model) renderFocus() string {
 		}
 	}
 
-	styledPanel := panelStyle.Render(panel)
-	if pad := m.sidePanelTopPadding(); pad > 0 {
-		styledPanel = strings.Repeat("\n", pad) + styledPanel
-	}
-
-	var combined string
-	if !horizontalOK {
-		combined = lipgloss.JoinVertical(lipgloss.Left, mainInfo, styledPanel)
-	} else {
-		gap := ""
-		if gapWidth > 0 {
-			gap = strings.Repeat(" ", gapWidth)
-		}
-		combined = lipgloss.JoinHorizontal(lipgloss.Top, mainInfo, gap, styledPanel)
-	}
-
-	title := m.renderOverviewTitleBar()
-	if title != "" {
-		return lipgloss.JoinVertical(lipgloss.Left, title, combined)
-	}
-	return combined
-}
-
-// renderRepositoryInfo renders basic repository information
-func (m *Model) renderRepositoryInfo(r *git.Repository) string {
-	var lines []string
-
-	lines = append(lines, m.styles.PanelTitle.Render("Repository: "+r.Name))
-	lines = append(lines, "")
-	lines = append(lines, "Branch: "+m.styles.BranchInfo.Render(r.State.Branch.Name))
-
-	if r.State.Branch.Upstream != nil {
-		lines = append(lines, "Upstream: "+m.styles.BranchInfo.Render(r.State.Branch.Upstream.Name))
-
-		pushables, _ := strconv.Atoi(r.State.Branch.Pushables)
-		pullables, _ := strconv.Atoi(r.State.Branch.Pullables)
-
-		if pushables > 0 || pullables > 0 {
-			lines = append(lines, "")
-			if pushables > 0 && pullables > 0 {
-				lines = append(lines, "Branch has diverged:")
-				lines = append(lines, fmt.Sprintf("  %s %d commits ahead", pushable, pushables))
-				lines = append(lines, fmt.Sprintf("  %s %d commits behind", pullable, pullables))
-			} else if pushables > 0 {
-				lines = append(lines, fmt.Sprintf("%s %d commits ahead", pushable, pushables))
-			} else {
-				lines = append(lines, fmt.Sprintf("%s %d commits behind", pullable, pullables))
-			}
-		}
-	}
-
-	return strings.Join(lines, "\n")
+	return panelStyle.Render(panel)
 }
 
 // renderBranches renders branch list
@@ -1301,117 +1232,6 @@ func (m *Model) renderRemotes(r *git.Repository, contentWidth, maxLines int) str
 	if remaining > 0 && end < count {
 		hint := m.styles.Help.Render("  ↓ more below")
 		lines = append(lines, padToWidth(hint, contentWidth))
-	}
-
-	lines = clampLines(lines, maxLines)
-	return strings.Join(lines, "\n")
-}
-
-// renderCommits renders commit list
-func (m *Model) renderCommits(r *git.Repository, contentWidth, maxLines int) string {
-	if m.hasMultipleTagged() {
-		return padToWidth("Commit view unavailable when multiple repositories are tagged", contentWidth)
-	}
-
-	if r == nil || r.State == nil || r.State.Branch == nil {
-		return padToWidth("No branch selected", contentWidth)
-	}
-
-	commits := r.State.Branch.Commits
-
-	count := len(commits)
-	if count == 0 {
-		return padToWidth("No commits", contentWidth)
-	}
-
-	if contentWidth <= 0 || maxLines <= 0 {
-		return ""
-	}
-
-	viewport := m.commitViewportSize(count)
-	if viewport > count {
-		viewport = count
-	}
-	m.ensureCommitCursorVisible(count, viewport)
-
-	start := m.commitOffset
-	if start < 0 {
-		start = 0
-	}
-	maxStart := count - viewport
-	if maxStart < 0 {
-		maxStart = 0
-	}
-	if start > maxStart {
-		start = maxStart
-	}
-	end := start + viewport
-	if end > count {
-		end = count
-	}
-
-	lines := make([]string, 0, maxLines)
-	instructions := fmt.Sprintf("%s checkout  %s soft reset  %s mixed reset  %s hard reset",
-		m.styles.KeyBinding.Render("[space/c]"),
-		m.styles.KeyBinding.Render("[s]"),
-		m.styles.KeyBinding.Render("[m]"),
-		m.styles.KeyBinding.Render("[H]"),
-	)
-	lines = append(lines, padToWidth(instructions, contentWidth))
-
-	remaining := maxLines - 1
-	if remaining <= 0 {
-		return strings.Join(lines, "\n")
-	}
-
-	lines = append(lines, padToWidth("", contentWidth))
-	remaining--
-	if remaining <= 0 {
-		return strings.Join(lines, "\n")
-	}
-
-	if start > 0 {
-		lines = append(lines, padToWidth(m.styles.Help.Render("  ↑ more above"), contentWidth))
-		remaining--
-	}
-
-	lineWidth := contentWidth
-
-	for i := start; i < end; i++ {
-		if remaining <= 0 {
-			break
-		}
-		commit := commits[i]
-		lineContent := commitPanelLineContent(commit)
-		offset := m.getCommitDetailOffset(r, commit, i)
-		maxOffset := maxCommitOffset(lineContent, lineWidth)
-		if offset > maxOffset {
-			offset = maxOffset
-			m.setCommitDetailOffset(r, commit, i, offset)
-		} else if maxOffset == 0 && offset != 0 {
-			offset = 0
-			m.setCommitDetailOffset(r, commit, i, 0)
-		}
-		visible := visibleCommitContent(lineContent, offset, lineWidth)
-		if visible == "" {
-			visible = fitStringToWidth(lineContent, lineWidth)
-			if visible == "" {
-				visible = lineContent
-			}
-		}
-		line := visible
-		if i == m.commitCursor {
-			lines = append(lines, m.styles.SelectedItem.Render(padToWidth(line, contentWidth)))
-		} else {
-			lines = append(lines, padToWidth(line, contentWidth))
-		}
-		remaining--
-	}
-
-	if end < count {
-		if remaining > 0 {
-			lines = append(lines, padToWidth(m.styles.Help.Render("  ↓ more below"), contentWidth))
-		}
 	}
 
 	lines = clampLines(lines, maxLines)
@@ -1605,7 +1425,7 @@ func (m *Model) renderStatusBar() string {
 		right = "return: confirm | esc: cancel"
 	}
 
-	if m.currentView != OverviewView && m.activeCredentialPrompt == nil && m.activeForcePrompt == nil {
+	if m.sidePanel != NonePanel && m.activeCredentialPrompt == nil && m.activeForcePrompt == nil {
 		if right == "" {
 			right = "esc: back"
 		} else if !strings.Contains(strings.ToLower(right), "esc: back") {
@@ -1648,12 +1468,13 @@ Actions:     Space   toggle queue        Enter   start queue
              a       tag all             A       untag all
              m       cycle mode          Tab     open lazygit
 
-Views:       b  branches    c  commits    r  remotes
+Views:       b  branches    r  remotes
              s  status      S  stash      ESC back (from views)
 
 Sorting:     n  by name     t  by time
 
 Git:         f  fetch repo   p  pull repo   P  push repo
+             c  commit (stage all + commit)
 Other:       ?  help         q/Ctrl+C  quit
 `
 
@@ -1666,6 +1487,95 @@ Other:       ?  help         q/Ctrl+C  quit
 	}
 
 	return m.styles.Panel.Copy().Width(panelWidth).Render(body)
+}
+
+func (m *Model) renderCommitPrompt() string {
+	if !m.commitPromptActive {
+		return ""
+	}
+	panelWidth := 60
+	if m.width > 0 && m.width-4 < panelWidth {
+		panelWidth = m.width - 4
+	}
+	if panelWidth < 30 {
+		panelWidth = 30
+	}
+	contentWidth := panelWidth - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	// Title
+	repoCount := len(m.commitPromptRepos)
+	var title string
+	if repoCount == 1 && m.commitPromptRepos[0] != nil {
+		title = fmt.Sprintf("Commit in %s", truncateString(m.commitPromptRepos[0].Name, contentWidth-10))
+	} else {
+		title = fmt.Sprintf("Commit in %d repos", repoCount)
+	}
+
+	// Commit message field
+	msgIndicator := " "
+	descIndicator := " "
+	if m.commitPromptField == commitFieldMessage {
+		msgIndicator = ">"
+	} else {
+		descIndicator = ">"
+	}
+
+	msgDisplay := m.commitMessageBuffer
+	if len(msgDisplay) > contentWidth-2 {
+		msgDisplay = msgDisplay[len(msgDisplay)-contentWidth+2:]
+	}
+
+	// Description field: show up to 5 visible lines
+	descLines := splitDescLines(m.commitDescBuffer, contentWidth-2)
+	maxVisible := 5
+	if len(descLines) > maxVisible {
+		descLines = descLines[len(descLines)-maxVisible:]
+	}
+	if len(descLines) == 0 {
+		descLines = []string{""}
+	}
+
+	lines := []string{
+		m.styles.PanelTitle.Render(title),
+		"",
+		fmt.Sprintf("%s Summary:     %s", msgIndicator, msgDisplay),
+		"",
+		fmt.Sprintf("%s Description:", descIndicator),
+	}
+	for _, dl := range descLines {
+		lines = append(lines, fmt.Sprintf("  %s", dl))
+	}
+	var hint string
+	if m.commitPromptField == commitFieldMessage {
+		hint = "enter: commit | tab: switch field | esc: cancel"
+	} else {
+		hint = "tab: switch field | esc: cancel"
+	}
+	lines = append(lines,
+		"",
+		hint,
+	)
+
+	content := strings.Join(lines, "\n")
+	return m.styles.Panel.Width(panelWidth).Render(content)
+}
+
+func splitDescLines(s string, maxWidth int) []string {
+	if s == "" {
+		return nil
+	}
+	raw := strings.Split(s, "\n")
+	var result []string
+	for _, line := range raw {
+		if maxWidth > 0 && len(line) > maxWidth {
+			line = line[len(line)-maxWidth:]
+		}
+		result = append(result, line)
+	}
+	return result
 }
 
 func (m *Model) renderCredentialPrompt() string {

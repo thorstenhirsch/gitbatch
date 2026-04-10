@@ -31,7 +31,6 @@ type Model struct {
 	err                      error
 
 	// View state
-	currentView            ViewType
 	sidePanel              SidePanelType
 	showHelp               bool
 	branchCursor           int
@@ -48,6 +47,11 @@ type Model struct {
 	activeCredentialPrompt *credentialPrompt
 	credentialInputField   credentialField
 	credentialInputBuffer  string
+	commitPromptActive     bool
+	commitPromptRepos      []*git.Repository
+	commitPromptField      commitField
+	commitMessageBuffer    string
+	commitDescBuffer       string
 
 	// Performance caching
 	cachedColWidths columnWidths
@@ -63,14 +67,6 @@ type Model struct {
 	lastUpdateCheck    time.Time
 	lastJobCheck       time.Time
 }
-
-// ViewType represents the current view mode
-type ViewType int
-
-const (
-	OverviewView ViewType = iota
-	FocusView
-)
 
 // columnWidths holds the calculated widths for table columns
 type columnWidths struct {
@@ -113,6 +109,13 @@ type credentialField int
 const (
 	credentialFieldUsername credentialField = iota
 	credentialFieldPassword
+)
+
+type commitField int
+
+const (
+	commitFieldMessage     commitField = iota
+	commitFieldDescription
 )
 
 // ModeID identifies the mode
@@ -298,7 +301,6 @@ func New(mode string, directories []string) *Model {
 		directories:        directories,
 		mode:               initialMode,
 		repositories:       make([]*git.Repository, 0),
-		currentView:        OverviewView,
 		sidePanel:          NonePanel,
 		styles:             DefaultStyles(),
 		loading:            true,

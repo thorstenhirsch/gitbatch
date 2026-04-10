@@ -11,6 +11,13 @@ import (
 func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	if m.commitPromptActive {
+		handled, cmd := m.handleCommitPromptKey(msg)
+		if handled {
+			return m, cmd
+		}
+	}
+
 	if m.activeCredentialPrompt != nil {
 		handled, cmd := m.handleCredentialPromptKey(msg)
 		if handled {
@@ -43,15 +50,12 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 			return m, nil
 		}
-		if m.currentView == FocusView {
-			m.currentView = OverviewView
+		if m.sidePanel != NonePanel {
 			m.sidePanel = NonePanel
 			m.clearSuccessFormatting()
 			return m, nil
 		}
-		if m.currentView == OverviewView {
-			m.clearSuccessFormatting()
-		}
+		m.clearSuccessFormatting()
 		return m, nil
 
 	case "tab":
@@ -80,14 +84,10 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch m.currentView {
-	case OverviewView:
-		return m.handleOverviewKeys(msg)
-	case FocusView:
+	if m.sidePanel != NonePanel {
 		return m.handleFocusKeys(msg)
 	}
-
-	return m, nil
+	return m.handleOverviewKeys(msg)
 }
 
 func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -163,12 +163,12 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetCommitScrollForSelected()
 
 	case "right", "l":
-		if m.adjustCommitScroll(1) {
+		if m.adjustCommitScroll(12) {
 			return m, nil
 		}
 
 	case "left", "h":
-		if m.adjustCommitScroll(-1) {
+		if m.adjustCommitScroll(-12) {
 			return m, nil
 		}
 
@@ -220,6 +220,10 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activatePanel(BranchPanel)
 
 	case "c":
+		if m.err != nil {
+			m.err = nil
+			return m, nil
+		}
 		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
 			repo := m.repositories[m.cursor]
 			if repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail {
@@ -227,14 +231,8 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		if m.err != nil {
-			m.err = nil
-			return m, nil
-		}
-		if !m.requiresSingleSelection("Commit view unavailable for tagged selection") {
-			return m, nil
-		}
-		m.activatePanel(CommitPanel)
+		m.openCommitPrompt()
+		return m, nil
 
 	case "r":
 		m.activatePanel(RemotePanel)
@@ -265,7 +263,6 @@ func (m *Model) handleFocusKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch key {
 	case "esc", "backspace":
-		m.currentView = OverviewView
 		m.sidePanel = NonePanel
 		return m, nil
 	}
@@ -274,8 +271,6 @@ func (m *Model) handleFocusKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleBranchPanelKey(key)
 	case RemotePanel:
 		return m.handleRemotePanelKey(key)
-	case CommitPanel:
-		return m.handleCommitPanelKey(key)
 	default:
 		return m, nil
 	}

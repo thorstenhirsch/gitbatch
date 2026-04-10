@@ -39,6 +39,9 @@ const (
 
 	// PushJob is wrapper of git push command
 	PushJob Type = "push"
+
+	// CommitJob is wrapper of git add -A && git commit
+	CommitJob Type = "commit"
 )
 
 // PullJobConfig wraps pull options with queue behaviour flags.
@@ -335,6 +338,45 @@ func (j *Job) Start() error {
 					Message:         msg,
 					Err:             err,
 					SuppressSuccess: suppress,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
+			return err
+		}
+	case CommitJob:
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "committing.."
+		}
+		var opts *command.CommitOptions
+		switch cfg := j.Options.(type) {
+		case *command.CommitOptions:
+			opts = cfg
+		case command.CommitOptions:
+			opts = &cfg
+		default:
+			opts = nil
+		}
+		if opts == nil {
+			msg := "commit options not provided"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation: command.OperationCommit,
+				Err:       errors.New(msg),
+				Message:   msg,
+			})
+			return nil
+		}
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("commit:%s", j.Repository.RepoID),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationCommit,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.CommitWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationCommit,
+					Message:   msg,
+					Err:       err,
 				}
 			},
 		}
