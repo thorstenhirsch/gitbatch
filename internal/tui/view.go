@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -464,6 +465,14 @@ func (m *Model) View() string {
 		}
 	}
 
+	if m.stashPromptActive {
+		if prompt := m.renderStashPrompt(); prompt != "" {
+			content = lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, prompt,
+				lipgloss.WithWhitespaceChars(" "),
+			)
+		}
+	}
+
 	if m.activeCredentialPrompt != nil {
 		if prompt := m.renderCredentialPrompt(); prompt != "" {
 			content = lipgloss.JoinVertical(lipgloss.Left, content, prompt)
@@ -530,60 +539,109 @@ func (m *Model) renderOverview() string {
 	// Calculate visible range based on terminal height
 	// Reserve space for: title (1) + top border (1) + bottom border (1) + status bar (1)
 	visibleHeight := m.height - 4
-	startIdx := 0
-	endIdx := len(m.repositories)
-
-	if len(m.repositories) > visibleHeight {
-		// Center cursor in view
-		startIdx = m.cursor - visibleHeight/2
-		if startIdx < 0 {
-			startIdx = 0
-		}
-		endIdx = startIdx + visibleHeight
-		if endIdx > len(m.repositories) {
-			endIdx = len(m.repositories)
-			startIdx = endIdx - visibleHeight
-			if startIdx < 0 {
-				startIdx = 0
-			}
-		}
-	}
 
 	// Compute column widths based on content and available width (cached)
 	colWidths := m.getColumnWidths()
 
 	title := m.renderOverviewTitleBar()
 
+	// Compute cumulative row offsets for each repo (accounts for expanded branches)
+	repoRowStart := make([]int, len(m.repositories))
+	totalRows := 0
+	for i, r := range m.repositories {
+		repoRowStart[i] = totalRows
+		totalRows += m.repoRowCount(r)
+	}
+
+	// Determine the scroll window: which visual rows are visible
+	topRow := 0
+	if totalRows > visibleHeight && m.cursor < len(m.repositories) {
+		cursorRow := repoRowStart[m.cursor]
+		topRow = cursorRow - visibleHeight/2
+		if topRow < 0 {
+			topRow = 0
+		}
+		if topRow+visibleHeight > totalRows {
+			topRow = totalRows - visibleHeight
+			if topRow < 0 {
+				topRow = 0
+			}
+		}
+	}
+	bottomRow := topRow + visibleHeight
+	if bottomRow > totalRows {
+		bottomRow = totalRows
+	}
+
+	// Find the first repo that has rows in the visible window
+	startIdx := 0
+	for i, r := range m.repositories {
+		if repoRowStart[i]+m.repoRowCount(r) > topRow {
+			startIdx = i
+			break
+		}
+	}
+
+	// Find the last repo that has rows in the visible window
+	endIdx := len(m.repositories)
+	for i := startIdx; i < len(m.repositories); i++ {
+		if repoRowStart[i] >= bottomRow {
+			endIdx = i
+			break
+		}
+	}
+
 	var topLabel, bottomLabel string
-	if startIdx > 0 {
+	if topRow > 0 {
 		topLabel = "↑ more above"
 	}
-	if endIdx < len(m.repositories) {
+	if bottomRow < totalRows {
 		bottomLabel = "↓ more below"
 	}
 
 	// Top border for table
 	topBorder := m.renderTableBorder(colWidths, "top", topLabel)
 
-	// Render repositories
+	// Render repositories with optional expanded branches
 	var lines []string
-	for i := startIdx; i < endIdx; i++ {
+	for i := startIdx; i < endIdx && len(lines) < visibleHeight; i++ {
 		r := m.repositories[i]
-		selected := i == m.cursor
-		line := m.renderRepositoryLine(r, selected, colWidths)
-		lines = append(lines, line)
+		rowBase := repoRowStart[i]
+
+		// Primary repo line
+		if rowBase >= topRow {
+			selected := i == m.cursor
+			lines = append(lines, m.renderRepositoryLine(r, selected, colWidths))
+		}
+
+		// Expanded branch lines (non-HEAD branches)
+		if m.expandBranches && r.State != nil && r.State.Branch != nil {
+			style := m.repoUnselectedStyle(r)
+			headName := r.State.Branch.Name
+			for j, branch := range r.Branches {
+				if branch == nil || branch.Name == headName {
+					continue
+				}
+				branchRowPos := rowBase + 1 + m.expandedBranchOffset(r, j)
+				if branchRowPos < topRow {
+					continue
+				}
+				if len(lines) >= visibleHeight {
+					break
+				}
+				lines = append(lines, m.renderExpandedBranchLine(r, branch, style, colWidths))
+			}
+		}
 	}
 
 	// Fill remaining rows with empty table rows to stretch to full height
-	currentRowCount := len(lines)
-	for currentRowCount < visibleHeight {
+	for len(lines) < visibleHeight {
 		border := m.styles.TableBorder.Render("│")
 		emptyRepoCol := strings.Repeat(" ", colWidths.repo)
 		emptyBranchCol := strings.Repeat(" ", colWidths.branch)
 		emptyCommitCol := strings.Repeat(" ", colWidths.commitMsg)
 		emptyRow := border + emptyRepoCol + border + emptyBranchCol + border + emptyCommitCol + border
 		lines = append(lines, emptyRow)
-		currentRowCount++
 	}
 
 	// Bottom border for table
@@ -743,6 +801,107 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 
 	border := m.styles.TableBorder.Render("│")
 	return border + styledRepoCol + border + styledBranchCol + border + styledCommitCol + border
+}
+
+// expandedBranchOffset returns the visual row offset (from 0) for a non-HEAD branch
+// at index branchIdx, skipping the HEAD branch in the count.
+func (m *Model) expandedBranchOffset(r *git.Repository, branchIdx int) int {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return branchIdx
+	}
+	headName := r.State.Branch.Name
+	offset := 0
+	for i := 0; i < branchIdx; i++ {
+		if r.Branches[i] != nil && r.Branches[i].Name != headName {
+			offset++
+		}
+	}
+	return offset
+}
+
+// repoRowCount returns how many visual rows a repository occupies.
+func (m *Model) repoRowCount(r *git.Repository) int {
+	if !m.expandBranches || r == nil || len(r.Branches) <= 1 {
+		return 1
+	}
+	return len(r.Branches)
+}
+
+// repoUnselectedStyle determines the lipgloss style for a repo's rows (unselected).
+func (m *Model) repoUnselectedStyle(r *git.Repository) lipgloss.Style {
+	status := r.WorkStatus()
+	dirty := repoIsDirty(r)
+	hasLocalChanges := repoHasLocalChanges(r)
+	failed := status == git.Fail
+	requiresCredentials := failed && r.State != nil && r.State.RequiresCredentials
+	noUpstream := failed && r.State != nil && r.State.NoUpstream
+
+	style := m.styles.ListItem
+	switch status {
+	case git.Pending:
+		style = m.styles.PendingItem
+	case git.Queued:
+		style = m.styles.QueuedItem
+	case git.Working:
+		style = m.styles.WorkingItem
+	case git.Success:
+		style = m.styles.SuccessItem
+	case git.Fail:
+		if noUpstream {
+			style = m.styles.DisabledItem
+		} else if requiresCredentials {
+			style = m.styles.CredentialsItem
+		} else {
+			style = m.styles.FailedItem
+		}
+	}
+	if hasLocalChanges && !dirty && !failed && status.Ready {
+		style = m.styles.LocalChangesItem
+	}
+	if dirty && !failed && status.Ready {
+		style = m.styles.DisabledItem
+	}
+	return style
+}
+
+// renderExpandedBranchLine renders a single expanded branch row for a non-HEAD branch.
+// It uses the same color as the repo's primary row but without status icons or repo name.
+func (m *Model) renderExpandedBranchLine(r *git.Repository, branch *git.Branch, style lipgloss.Style, colWidths columnWidths) string {
+	// Empty repo column (spaces matching cursor + status + repo name width)
+	repoColumn := style.Render(strings.Repeat(" ", colWidths.repo))
+
+	// Branch column
+	branchContentWidth := colWidths.branch - 1
+	if branchContentWidth < 0 {
+		branchContentWidth = 0
+	}
+	branchStr := branch.Name + syncSuffix(branch)
+	branchStr = truncateString(branchStr, branchContentWidth)
+	branchColumn := style.Render(fmt.Sprintf("%-*s", colWidths.branch, " "+branchStr))
+
+	// Commit column — look up last commit for this branch
+	commitContentWidth := colWidths.commitMsg - 1
+	if commitContentWidth < 0 {
+		commitContentWidth = 0
+	}
+	commitStr := branchCommitContent(r, branch)
+	commitStr = truncateString(commitStr, commitContentWidth)
+	commitColumn := style.Render(fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitStr))
+
+	border := m.styles.TableBorder.Render("│")
+	return border + repoColumn + border + branchColumn + border + commitColumn + border
+}
+
+// branchCommitContent returns the last commit message for a specific branch.
+func branchCommitContent(r *git.Repository, branch *git.Branch) string {
+	if r == nil || branch == nil || branch.Reference == nil {
+		return ""
+	}
+	commitObj, err := r.Repo.CommitObject(branch.Reference.Hash())
+	if err != nil {
+		return ""
+	}
+	return firstLine(commitObj.Message)
 }
 
 func commitSummary(r *git.Repository) (string, plumbing.Hash) {
@@ -1001,8 +1160,15 @@ func (m *Model) renderPanelPopup() string {
 		}
 	case StatusPanel:
 		panelTitle = "Status"
-	case StashPanel:
-		panelTitle = "Stash"
+	case StashActionPanel:
+		if m.stashAction == stashActionPop {
+			panelTitle = "Pop Stash"
+		} else {
+			panelTitle = "Drop Stash"
+		}
+		if len(tagged) > 1 {
+			panelTitle = "Common " + panelTitle
+		}
 	default:
 		return ""
 	}
@@ -1023,8 +1189,8 @@ func (m *Model) renderPanelPopup() string {
 		panelContent = m.renderRemotes(r, contentWidth, maxLines)
 	case StatusPanel:
 		panelContent = m.renderStatus(r, contentWidth, maxLines)
-	case StashPanel:
-		panelContent = m.renderStash(r, contentWidth, maxLines)
+	case StashActionPanel:
+		panelContent = m.renderStashActionPanel(contentWidth, maxLines)
 	}
 
 	// Assemble popup content
@@ -1245,58 +1411,250 @@ func (m *Model) renderStatus(r *git.Repository, contentWidth, maxLines int) stri
 	}
 
 	lines := make([]string, 0, maxLines)
-	line := "On branch " + m.styles.BranchInfo.Render(r.State.Branch.Name)
-	lines = append(lines, padToWidth(line, contentWidth))
+
+	addLine := func(s string) bool {
+		if len(lines) >= maxLines {
+			return false
+		}
+		lines = append(lines, padToWidth(s, contentWidth))
+		return len(lines) < maxLines
+	}
+
+	addSection := func() bool {
+		return addLine("")
+	}
+
+	// Branch & tracking
+	addLine("On branch " + m.styles.BranchInfo.Render(r.State.Branch.Name))
 
 	pushables, _ := strconv.Atoi(r.State.Branch.Pushables)
 	pullables, _ := strconv.Atoi(r.State.Branch.Pullables)
 
-	if len(lines) >= maxLines {
-		return strings.Join(clampLines(lines, maxLines), "\n")
-	}
-
 	switch {
 	case r.State.Branch.Upstream == nil:
-		lines = append(lines, padToWidth("Not tracking a remote branch", contentWidth))
+		addLine("Not tracking a remote branch")
 	case pushables == 0 && pullables == 0:
-		message := "Up to date with " + m.styles.BranchInfo.Render(r.State.Branch.Upstream.Name)
-		lines = append(lines, padToWidth(message, contentWidth))
+		addLine("Up to date with " + m.styles.BranchInfo.Render(r.State.Branch.Upstream.Name))
 	default:
 		if pushables > 0 && pullables > 0 {
-			lines = append(lines, padToWidth(fmt.Sprintf("Diverged from %s", r.State.Branch.Upstream.Name), contentWidth))
+			addLine(fmt.Sprintf("Diverged from %s (ahead %d, behind %d)", r.State.Branch.Upstream.Name, pushables, pullables))
 		} else if pushables > 0 {
-			lines = append(lines, padToWidth(fmt.Sprintf("Ahead by %d commit(s)", pushables), contentWidth))
+			addLine(fmt.Sprintf("Ahead of %s by %d commit(s)", r.State.Branch.Upstream.Name, pushables))
 		} else {
-			lines = append(lines, padToWidth(fmt.Sprintf("Behind by %d commit(s)", pullables), contentWidth))
+			addLine(fmt.Sprintf("Behind %s by %d commit(s)", r.State.Branch.Upstream.Name, pullables))
 		}
 	}
 
-	lines = clampLines(lines, maxLines)
-	return strings.Join(lines, "\n")
+	if r.State.Branch.HasLocalChanges {
+		addLine("Working tree has uncommitted changes")
+	} else if !r.State.Branch.Clean {
+		addLine("Working tree is dirty (conflicts with incoming)")
+	}
+
+	// Fetch additional stats via git commands
+	stats := m.fetchRepoStats(r)
+
+	// Last commit
+	if stats.lastCommitInfo != "" {
+		addSection()
+		addLine("Last commit")
+		addLine("  " + stats.lastCommitInfo)
+	}
+
+	// Counts section
+	addSection()
+	addLine(fmt.Sprintf("Branches       %d local, %d remote", stats.localBranches, stats.remoteBranches))
+	if stats.tags > 0 {
+		addLine(fmt.Sprintf("Tags           %d", stats.tags))
+	}
+	if stats.stashes > 0 {
+		addLine(fmt.Sprintf("Stashes        %d", stats.stashes))
+	}
+	addLine(fmt.Sprintf("Contributors   %d", stats.contributors))
+	addLine(fmt.Sprintf("Commits        %d", stats.commits))
+
+	// Size
+	if stats.repoSize != "" {
+		addSection()
+		addLine(fmt.Sprintf("Repo size      %s", stats.repoSize))
+	}
+
+	// Path
+	addSection()
+	addLine(r.AbsPath)
+
+	return strings.Join(clampLines(lines, maxLines), "\n")
 }
 
-// renderStash renders stash list
-func (m *Model) renderStash(r *git.Repository, contentWidth, maxLines int) string {
+type repoStats struct {
+	lastCommitInfo string
+	localBranches  int
+	remoteBranches int
+	tags           int
+	stashes        int
+	contributors   int
+	commits        int
+	repoSize       string
+}
+
+func (m *Model) fetchRepoStats(r *git.Repository) repoStats {
+	var stats repoStats
+
+	// Local & remote branches from already-loaded data
+	stats.localBranches = len(r.Branches)
+	for _, remote := range r.Remotes {
+		if remote != nil {
+			stats.remoteBranches += len(remote.Branches)
+		}
+	}
+
+	// Stashes from loaded data
+	stats.stashes = len(r.Stasheds)
+
+	// Last commit (git log -1)
+	if out, err := statusGitCommand(r.AbsPath, "log", "-1", "--format=%ar by %an: %s"); err == nil && out != "" {
+		stats.lastCommitInfo = out
+	}
+
+	// Tag count
+	if out, err := statusGitCommand(r.AbsPath, "tag", "-l"); err == nil {
+		count := 0
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(line) != "" {
+				count++
+			}
+		}
+		stats.tags = count
+	}
+
+	// Contributor count (unique authors)
+	if out, err := statusGitCommand(r.AbsPath, "shortlog", "-sn", "--all"); err == nil {
+		count := 0
+		for _, line := range strings.Split(out, "\n") {
+			if strings.TrimSpace(line) != "" {
+				count++
+			}
+		}
+		stats.contributors = count
+	}
+
+	// Commit count
+	if out, err := statusGitCommand(r.AbsPath, "rev-list", "--count", "HEAD"); err == nil {
+		out = strings.TrimSpace(out)
+		if n, err := strconv.Atoi(out); err == nil {
+			stats.commits = n
+		}
+	}
+
+	// Repo size (du on .git directory)
+	if out, err := repoSizeCommand(r.AbsPath); err == nil {
+		stats.repoSize = out
+	}
+
+	return stats
+}
+
+func statusGitCommand(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func repoSizeCommand(dir string) (string, error) {
+	gitDir := dir + "/.git"
+	cmd := exec.Command("du", "-sh", gitDir)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) > 0 {
+		return parts[0], nil
+	}
+	return "", fmt.Errorf("no output")
+}
+
+// renderStashActionPanel renders the stash selector for pop/drop operations
+func (m *Model) renderStashActionPanel(contentWidth, maxLines int) string {
 	if contentWidth <= 0 || maxLines <= 0 {
 		return ""
 	}
 
-	stashes := r.Stasheds
-	if len(stashes) == 0 {
+	items := m.stashActionPanelItems()
+	if len(items) == 0 {
 		return padToWidth("No stashes", contentWidth)
 	}
 
-	lines := make([]string, 0, maxLines)
-	for _, stash := range stashes {
-		line := fmt.Sprintf("stash@{%d}: %s %s", stash.StashID, stash.BranchName, stash.Description)
-		lines = append(lines, padToWidth(line, contentWidth))
-		if len(lines) >= maxLines {
-			break
-		}
+	viewport := maxLines
+	if viewport > len(items) {
+		viewport = len(items)
 	}
 
-	lines = clampLines(lines, maxLines)
+	lines := make([]string, 0, viewport)
+	for i := m.stashOffset; i < len(items) && len(lines) < viewport; i++ {
+		item := items[i]
+		label := item.Description
+		if label == "" {
+			label = fmt.Sprintf("stash@{%d} on %s", item.StashID, item.BranchName)
+		}
+		line := padToWidth("  "+label, contentWidth)
+		if i == m.stashCursor {
+			line = m.styles.SelectedItem.Render(padToWidth("> "+label, contentWidth))
+		}
+		lines = append(lines, line)
+	}
+
 	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderStashPrompt() string {
+	if !m.stashPromptActive {
+		return ""
+	}
+	panelWidth := 60
+	if m.width > 0 && m.width-4 < panelWidth {
+		panelWidth = m.width - 4
+	}
+	if panelWidth < 30 {
+		panelWidth = 30
+	}
+	contentWidth := panelWidth - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	// Title
+	repoCount := len(m.stashPromptRepos)
+	var title string
+	if repoCount == 1 && m.stashPromptRepos[0] != nil {
+		title = fmt.Sprintf("Stash in %s", truncateString(m.stashPromptRepos[0].Name, contentWidth-10))
+	} else {
+		title = fmt.Sprintf("Stash in %d repos", repoCount)
+	}
+
+	// Message field
+	msgDisplay := m.stashMessageBuffer
+	if len(msgDisplay) > contentWidth-2 {
+		msgDisplay = msgDisplay[len(msgDisplay)-contentWidth+2:]
+	}
+
+	msgLine := fmt.Sprintf("> Message: %s_", msgDisplay)
+	hint := "(optional, Enter to stash, Esc to cancel)"
+
+	parts := []string{
+		m.styles.PanelTitle.Render(title),
+		"",
+		msgLine,
+		"",
+		m.styles.Help.Render(hint),
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return m.styles.Panel.Width(panelWidth).Render(body)
 }
 
 // renderStatusBar renders the bottom status bar
@@ -1468,13 +1826,14 @@ Actions:     Space   toggle queue        Enter   start queue
              a       tag all             A       untag all
              m       cycle mode          Tab     open lazygit
 
-Views:       b  branches    r  remotes
-             s  status      S  stash      ESC back (from views)
+Views:       b  branches    r  remotes    B  expand branches
+             s  status      ESC back (from views)
 
 Sorting:     n  by name     t  by time
 
 Git:         f  fetch repo   p  pull repo   P  push repo
-             c  commit (stage all + commit)
+             c  commit       S  stash       (both: stage all)
+             O  pop stash    D  drop stash
 Other:       ?  help         q/Ctrl+C  quit
 `
 

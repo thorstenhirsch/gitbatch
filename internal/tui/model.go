@@ -31,6 +31,7 @@ type Model struct {
 	err                      error
 
 	// View state
+	expandBranches         bool
 	sidePanel              SidePanelType
 	showHelp               bool
 	branchCursor           int
@@ -52,6 +53,12 @@ type Model struct {
 	commitPromptField      commitField
 	commitMessageBuffer    string
 	commitDescBuffer       string
+	stashPromptActive      bool
+	stashPromptRepos       []*git.Repository
+	stashMessageBuffer     string
+	stashAction            stashActionType
+	stashCursor            int
+	stashOffset            int
 
 	// Performance caching
 	cachedColWidths columnWidths
@@ -83,7 +90,7 @@ const (
 	BranchPanel
 	RemotePanel
 	CommitPanel
-	StashPanel
+	StashActionPanel
 	StatusPanel
 )
 
@@ -116,6 +123,14 @@ type commitField int
 const (
 	commitFieldMessage     commitField = iota
 	commitFieldDescription
+)
+
+type stashActionType int
+
+const (
+	stashActionNone stashActionType = iota
+	stashActionPop
+	stashActionDrop
 )
 
 // ModeID identifies the mode

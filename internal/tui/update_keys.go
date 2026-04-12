@@ -18,6 +18,13 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.stashPromptActive {
+		handled, cmd := m.handleStashPromptKey(msg)
+		if handled {
+			return m, cmd
+		}
+	}
+
 	if m.activeCredentialPrompt != nil {
 		handled, cmd := m.handleCredentialPromptKey(msg)
 		if handled {
@@ -219,6 +226,9 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "b":
 		m.activatePanel(BranchPanel)
 
+	case "B":
+		m.expandBranches = !m.expandBranches
+
 	case "c":
 		if m.err != nil {
 			m.err = nil
@@ -244,10 +254,16 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activatePanel(StatusPanel)
 
 	case "S":
-		if !m.requiresSingleSelection("Stash view unavailable for tagged selection") {
-			return m, nil
-		}
-		m.activatePanel(StashPanel)
+		m.openStashPrompt()
+		return m, nil
+
+	case "O":
+		m.openStashAction(stashActionPop)
+		return m, nil
+
+	case "D":
+		m.openStashAction(stashActionDrop)
+		return m, nil
 
 	case "n":
 		m.sortByName()
@@ -271,6 +287,8 @@ func (m *Model) handleFocusKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleBranchPanelKey(key)
 	case RemotePanel:
 		return m.handleRemotePanelKey(key)
+	case StashActionPanel:
+		return m.handleStashActionPanelKey(key)
 	default:
 		return m, nil
 	}

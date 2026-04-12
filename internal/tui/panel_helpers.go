@@ -222,3 +222,90 @@ func compareRemoteEntries(a, b remotePanelEntry) int {
 	}
 	return cmp.Compare(a.BranchName, b.BranchName)
 }
+
+// --- Stash panel items ---
+
+type stashPanelItem struct {
+	Description string
+	BranchName  string
+	StashID     int
+}
+
+func stashItemsForRepo(repo *git.Repository) []stashPanelItem {
+	if repo == nil {
+		return nil
+	}
+	items := make([]stashPanelItem, 0, len(repo.Stasheds))
+	for _, s := range repo.Stasheds {
+		if s == nil {
+			continue
+		}
+		items = append(items, stashPanelItem{
+			Description: s.Description,
+			BranchName:  s.BranchName,
+			StashID:     s.StashID,
+		})
+	}
+	return items
+}
+
+func commonStashItems(repos []*git.Repository) []stashPanelItem {
+	if len(repos) == 0 {
+		return nil
+	}
+	// Build set of descriptions from first repo
+	type stashInfo struct {
+		Description string
+		BranchName  string
+	}
+	common := make(map[string]stashInfo)
+	if repos[0] != nil {
+		for _, s := range repos[0].Stasheds {
+			if s != nil {
+				common[s.Description] = stashInfo{
+					Description: s.Description,
+					BranchName:  s.BranchName,
+				}
+			}
+		}
+	}
+	// Intersect with other repos
+	for _, repo := range repos[1:] {
+		present := make(map[string]struct{})
+		if repo != nil {
+			for _, s := range repo.Stasheds {
+				if s != nil {
+					present[s.Description] = struct{}{}
+				}
+			}
+		}
+		for desc := range common {
+			if _, ok := present[desc]; !ok {
+				delete(common, desc)
+			}
+		}
+	}
+	// Convert to sorted slice
+	items := make([]stashPanelItem, 0, len(common))
+	for _, info := range common {
+		items = append(items, stashPanelItem{
+			Description: info.Description,
+			BranchName:  info.BranchName,
+		})
+	}
+	slices.SortFunc(items, func(a, b stashPanelItem) int {
+		return cmp.Compare(a.Description, b.Description)
+	})
+	return items
+}
+
+func (m *Model) stashActionPanelItems() []stashPanelItem {
+	repos := m.stashActionRepos()
+	if len(repos) == 0 {
+		return nil
+	}
+	if len(repos) > 1 {
+		return commonStashItems(repos)
+	}
+	return stashItemsForRepo(repos[0])
+}

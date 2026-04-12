@@ -42,6 +42,15 @@ const (
 
 	// CommitJob is wrapper of git add -A && git commit
 	CommitJob Type = "commit"
+
+	// StashJob is wrapper of git stash push
+	StashJob Type = "stash"
+
+	// StashPopJob is wrapper of git stash pop
+	StashPopJob Type = "stash-pop"
+
+	// StashDropJob is wrapper of git stash drop
+	StashDropJob Type = "stash-drop"
 )
 
 // PullJobConfig wraps pull options with queue behaviour flags.
@@ -375,6 +384,114 @@ func (j *Job) Start() error {
 				msg, err := command.CommitWithContext(ctx, j.Repository, &optsCopy)
 				return command.OperationOutcome{
 					Operation: command.OperationCommit,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
+			return err
+		}
+	case StashJob:
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "stashing.."
+		}
+		var opts *command.StashOptions
+		switch cfg := j.Options.(type) {
+		case *command.StashOptions:
+			opts = cfg
+		case command.StashOptions:
+			opts = &cfg
+		default:
+			opts = &command.StashOptions{}
+		}
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("stash:%s", j.Repository.RepoID),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationStash,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.StashWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationStash,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
+			return err
+		}
+	case StashPopJob:
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "popping stash.."
+		}
+		var opts *command.StashPopOptions
+		switch cfg := j.Options.(type) {
+		case *command.StashPopOptions:
+			opts = cfg
+		case command.StashPopOptions:
+			opts = &cfg
+		default:
+			opts = nil
+		}
+		if opts == nil {
+			msg := "stash pop options not provided"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation: command.OperationStashPop,
+				Err:       errors.New(msg),
+				Message:   msg,
+			})
+			return nil
+		}
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("stash-pop:%s", j.Repository.RepoID),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationStashPop,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.StashPopWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationStashPop,
+					Message:   msg,
+					Err:       err,
+				}
+			},
+		}
+		if err := command.ScheduleGitCommand(j.Repository, req); err != nil {
+			return err
+		}
+	case StashDropJob:
+		if j.Repository.State != nil {
+			j.Repository.State.Message = "dropping stash.."
+		}
+		var opts *command.StashDropOptions
+		switch cfg := j.Options.(type) {
+		case *command.StashDropOptions:
+			opts = cfg
+		case command.StashDropOptions:
+			opts = &cfg
+		default:
+			opts = nil
+		}
+		if opts == nil {
+			msg := "stash drop options not provided"
+			command.ScheduleStateEvaluation(j.Repository, command.OperationOutcome{
+				Operation: command.OperationStashDrop,
+				Err:       errors.New(msg),
+				Message:   msg,
+			})
+			return nil
+		}
+		optsCopy := *opts
+		req := &command.GitCommandRequest{
+			Key:       fmt.Sprintf("stash-drop:%s", j.Repository.RepoID),
+			Timeout:   command.DefaultGitCommandTimeout,
+			Operation: command.OperationStashDrop,
+			Execute: func(ctx context.Context) command.OperationOutcome {
+				msg, err := command.StashDropWithContext(ctx, j.Repository, &optsCopy)
+				return command.OperationOutcome{
+					Operation: command.OperationStashDrop,
 					Message:   msg,
 					Err:       err,
 				}
