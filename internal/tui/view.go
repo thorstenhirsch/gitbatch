@@ -122,13 +122,25 @@ func calculateColumnWidths(totalWidth int, repos []*git.Repository) columnWidths
 	}
 }
 
+// repoDisplayName returns the repo name with a stash indicator suffix if stashes exist.
+// e.g. "myrepo {2}" for 3 stashes (highest index = 2), or just "myrepo" if none.
+func repoDisplayName(r *git.Repository) string {
+	if r == nil {
+		return ""
+	}
+	if len(r.Stasheds) == 0 {
+		return r.Name
+	}
+	return fmt.Sprintf("%s {%d}", r.Name, len(r.Stasheds)-1)
+}
+
 func maxRepoNameLength(repos []*git.Repository) int {
 	maxLen := 0
 	for _, r := range repos {
 		if r == nil {
 			continue
 		}
-		if length := lipgloss.Width(r.Name); length > maxLen {
+		if length := lipgloss.Width(repoDisplayName(r)); length > maxLen {
 			maxLen = length
 		}
 	}
@@ -707,7 +719,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	if repoNameWidth < 0 {
 		repoNameWidth = 0
 	}
-	repoName := truncateString(r.Name, repoNameWidth)
+	repoName := truncateString(repoDisplayName(r), repoNameWidth)
 	repoColumn := m.applyUnselectedColumnStyle(
 		fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName),
 		selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream,
@@ -1606,6 +1618,35 @@ func (m *Model) renderStashPrompt() string {
 	return m.styles.Panel.Width(panelWidth).Render(body)
 }
 
+// hasCommitTargets returns true if pressing 'c' would find repos with local changes.
+func (m *Model) hasCommitTargets() bool {
+	repos := m.taggedRepositories()
+	if len(repos) == 0 {
+		return repoHasLocalChanges(m.currentRepository())
+	}
+	for _, repo := range repos {
+		if repoHasLocalChanges(repo) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasStashTargets returns true if pressing 'O' or 'D' would find repos with stashes.
+func (m *Model) hasStashTargets() bool {
+	repos := m.taggedRepositories()
+	if len(repos) == 0 {
+		repo := m.currentRepository()
+		return repo != nil && len(repo.Stasheds) > 0
+	}
+	for _, repo := range repos {
+		if repo != nil && len(repo.Stasheds) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // renderStatusBar renders the bottom status bar
 func (m *Model) renderStatusBar() string {
 	modeSymbol := pullSymbol
@@ -1647,15 +1688,31 @@ func (m *Model) renderStatusBar() string {
 	rightWidth := lipgloss.Width(right)
 
 	if center == "" {
-		tagHint := "space: tag for batch run"
+		tagHint := "space: tag"
 		if focusRepo != nil && focusRepo.WorkStatus() == git.Queued {
 			tagHint = "space: untag"
 		}
 		if queuedCount > 0 {
-			tagHint += " | enter: batch run"
-			center = fmt.Sprintf("tagged: %d | %s", queuedCount, tagHint)
+			tagHint += " | enter: run"
+			parts := []string{fmt.Sprintf("tagged: %d", queuedCount)}
+			if m.hasCommitTargets() {
+				parts = append(parts, "c commit", "S stash")
+			}
+			if m.hasStashTargets() {
+				parts = append(parts, "O pop", "D drop")
+			}
+			parts = append(parts, tagHint)
+			center = strings.Join(parts, " | ")
 		} else if m.activeForcePrompt == nil && m.activeCredentialPrompt == nil {
-			center = "f fetch | p pull | P push | space: tag for batch run"
+			parts := []string{"f fetch", "p pull", "P push"}
+			if m.hasCommitTargets() {
+				parts = append(parts, "c commit", "S stash")
+			}
+			if m.hasStashTargets() {
+				parts = append(parts, "O pop", "D drop")
+			}
+			parts = append(parts, tagHint)
+			center = strings.Join(parts, " | ")
 		}
 	}
 
@@ -1706,16 +1763,20 @@ func (m *Model) renderStatusBar() string {
 	} else if dirty {
 		statusBarStyle = m.styles.StatusBarDisabled
 		left = " repo disabled"
-		center = "Only TAB (lazygit) permitted while working tree is disabled"
+		if m.hasStashTargets() {
+			center = "O: pop stash | D: drop stash"
+		} else {
+			center = "working tree has conflicting changes"
+		}
 		right = "TAB: lazygit"
 	} else if hasLocalChanges {
 		statusBarStyle = m.styles.StatusBarLocalChanges
 		left = " ~ local changes"
-		if focusRepo != nil && focusRepo.State != nil && focusRepo.State.Branch != nil && focusRepo.State.Branch.HasIncomingCommits() {
-			center = "Uncommitted changes present — pull will fast-forward safely"
-		} else {
-			center = "Uncommitted changes present"
+		parts := []string{"c: commit", "S: stash"}
+		if m.hasStashTargets() {
+			parts = append(parts, "O: pop stash", "D: drop stash")
 		}
+		center = strings.Join(parts, " | ")
 	} else if m.err != nil {
 		statusBarStyle = m.styles.StatusBarPush
 		maxCenter := totalWidth - leftWidth - rightWidth - 2
