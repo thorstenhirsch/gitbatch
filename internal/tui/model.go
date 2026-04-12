@@ -39,7 +39,6 @@ type Model struct {
 	commitCursor           int
 	commitOffset           int
 	commitScrollOffsets    map[string]int
-	commitDetailScroll     map[string]int
 	branchOffset           int
 	remoteOffset           int
 	forcePromptQueue       []*forcePushPrompt
@@ -59,6 +58,9 @@ type Model struct {
 	stashAction            stashActionType
 	stashCursor            int
 	stashOffset            int
+
+	// Tick management — ensures only one spinner/job-check tick chain is active.
+	tickRunning bool
 
 	// Performance caching
 	cachedColWidths columnWidths
@@ -321,13 +323,13 @@ func New(mode string, directories []string) *Model {
 		loading:            true,
 		version:            Version,
 		commitScrollOffsets: make(map[string]int),
-		commitDetailScroll: make(map[string]int),
 		repositoryUpdateCh: make(chan struct{}, 256),
 	}
 }
 
 // Init initializes the model
 func (m *Model) Init() tea.Cmd {
+	m.tickRunning = true
 	cmds := []tea.Cmd{loadRepositoriesCmd(m.directories), m.listenRepositoryUpdatesCmd(), tickCmd()}
 	if len(m.directories) > loadingScreenThreshold {
 		cmds = append(cmds, listenLoadProgressCmd())

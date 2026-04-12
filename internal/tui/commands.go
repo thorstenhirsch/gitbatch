@@ -44,11 +44,23 @@ func listenLoadProgressCmd() tea.Cmd {
 	}
 }
 
-// tickCmd returns a command that sends a tick message after a delay
+// tickCmd returns a command that sends a tick message after a delay.
+// Callers outside the jobCompletedMsg handler should use ensureTicking()
+// instead to prevent multiple parallel tick chains.
 func tickCmd() tea.Cmd {
 	return tea.Tick(SpinnerDuration, func(t time.Time) tea.Msg {
 		return jobCompletedMsg{}
 	})
+}
+
+// ensureTicking starts the tick chain if it is not already running.
+// It returns nil if a tick is already active, preventing duplicate chains.
+func (m *Model) ensureTicking() tea.Cmd {
+	if m.tickRunning {
+		return nil
+	}
+	m.tickRunning = true
+	return tickCmd()
 }
 
 // isLazygitAvailable checks if lazygit is in PATH

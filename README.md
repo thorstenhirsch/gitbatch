@@ -35,7 +35,7 @@ run the `gitbatch` command from the parent of your git repositories. For start-u
 For more information see the [wiki pages](https://github.com/thorstenhirsch/gitbatch/wiki)
 
 ## Credits
-- [go-git](https://github.com/src-d/go-git) for git interface (partially)
+- [go-git](https://github.com/go-git/go-git) for git interface (partially)
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) for terminal user interface
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) for terminal styling
 - [viper](https://github.com/spf13/viper) for configuration management

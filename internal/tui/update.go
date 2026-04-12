@@ -105,14 +105,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Throttle O(n) job check to avoid starvation on large repo lists.
 		if m.shouldThrottleCheck(&m.lastJobCheck, 100*time.Millisecond) {
 			m.updateJobsRunningFlag()
-			if m.jobsRunning {
-				return m, tea.Batch(tickCmd(), m.listenRepositoryUpdatesCmd())
-			}
 		}
-		return m, m.listenRepositoryUpdatesCmd()
+		return m, tea.Batch(m.ensureTicking(), m.listenRepositoryUpdatesCmd())
 
 	case repositoriesWaitingMsg:
-		return m, tickCmd()
+		return m, m.ensureTicking()
 
 	case lazygitClosedMsg:
 		return m.handleLazygitClosed(msg)
@@ -127,6 +124,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.jobsRunning || m.loading {
 			return m, tickCmd()
 		}
+		m.tickRunning = false
 		return m, nil
 
 	case repoActionResultMsg:
@@ -161,12 +159,12 @@ func (m *Model) handleLazygitClosed(msg lazygitClosedMsg) (tea.Model, tea.Cmd) {
 		repo.NotifyRepositoryUpdated()
 		_ = command.ScheduleRepositoryRefresh(repo, nil)
 		m.jobsRunning = true
-		return m, tickCmd()
+		return m, m.ensureTicking()
 	}
 	*repo.State = msg.originalState
 	repo.NotifyRepositoryUpdated()
 	if m.updateJobsRunningFlag() {
-		return m, tickCmd()
+		return m, m.ensureTicking()
 	}
 	return m, nil
 }

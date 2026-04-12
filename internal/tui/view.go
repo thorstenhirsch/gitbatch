@@ -44,21 +44,6 @@ const (
 
 const panelHorizontalFrame = 4
 
-func (m *Model) overviewTitleHeight() int {
-	if m.height <= 0 {
-		return 0
-	}
-	return 1
-}
-
-func (m *Model) overviewTableBodyHeight() int {
-	visible := m.height - 4
-	if visible < 0 {
-		visible = 0
-	}
-	return visible + 2
-}
-
 // getColumnWidths returns cached column widths, recalculating only when necessary
 func (m *Model) getColumnWidths() columnWidths {
 	// Check if we need to recalculate
@@ -70,20 +55,6 @@ func (m *Model) getColumnWidths() columnWidths {
 	return m.cachedColWidths
 }
 
-func (m *Model) overviewTableWidth() int {
-	if m.width <= 0 {
-		return 0
-	}
-	widths := m.getColumnWidths()
-	total := widths.repo + widths.branch + widths.commitMsg + 4
-	if total > m.width {
-		total = m.width
-	}
-	if total < 0 {
-		total = 0
-	}
-	return total
-}
 
 func (m *Model) popupDimensions() (popupWidth, maxContentLines int) {
 	popupWidth = m.width * 70 / 100
@@ -1036,28 +1007,6 @@ func visibleCommitContent(content string, offset, width int) string {
 	return string(visible)
 }
 
-func commitPanelLineContent(commit *git.Commit) string {
-	if commit == nil {
-		return "(none)"
-	}
-	label := ""
-	switch commit.CommitType {
-	case git.LocalCommit:
-		label = "[local] "
-	case git.RemoteCommit:
-		label = "[remote] "
-	}
-	hash := "(none)"
-	if commit.Hash != "" {
-		hash = shortHash(commit.Hash)
-	}
-	message := singleLineMessage(commit.Message)
-	if message == "" {
-		return strings.TrimSpace(label + hash)
-	}
-	return strings.TrimSpace(fmt.Sprintf("%s%s %s", label, hash, message))
-}
-
 func firstLine(message string) string {
 	if idx := strings.IndexByte(message, '\n'); idx >= 0 {
 		message = message[:idx]
@@ -1184,9 +1133,9 @@ func (m *Model) renderPanelPopup() string {
 	var panelContent string
 	switch m.sidePanel {
 	case BranchPanel:
-		panelContent = m.renderBranches(r, contentWidth, maxLines)
+		panelContent = m.renderBranches(contentWidth, maxLines)
 	case RemotePanel:
-		panelContent = m.renderRemotes(r, contentWidth, maxLines)
+		panelContent = m.renderRemotes(contentWidth, maxLines)
 	case StatusPanel:
 		panelContent = m.renderStatus(r, contentWidth, maxLines)
 	case StashActionPanel:
@@ -1221,7 +1170,7 @@ func (m *Model) renderPanelPopup() string {
 }
 
 // renderBranches renders branch list
-func (m *Model) renderBranches(r *git.Repository, contentWidth, maxLines int) string {
+func (m *Model) renderBranches(contentWidth, maxLines int) string {
 	items := m.branchPanelItems()
 	if len(items) == 0 {
 		if m.hasMultipleTagged() {
@@ -1315,7 +1264,7 @@ func (m *Model) renderBranches(r *git.Repository, contentWidth, maxLines int) st
 }
 
 // renderRemotes renders remote list
-func (m *Model) renderRemotes(r *git.Repository, contentWidth, maxLines int) string {
+func (m *Model) renderRemotes(contentWidth, maxLines int) string {
 	items := m.remotePanelItems()
 	if len(items) == 0 {
 		if m.hasMultipleTagged() {
@@ -1845,7 +1794,7 @@ Other:       ?  help         q/Ctrl+C  quit
 		panelWidth = m.width - 4
 	}
 
-	return m.styles.Panel.Copy().Width(panelWidth).Render(body)
+	return m.styles.Panel.Width(panelWidth).Render(body)
 }
 
 func (m *Model) renderCommitPrompt() string {

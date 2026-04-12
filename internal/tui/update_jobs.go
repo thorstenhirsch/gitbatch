@@ -178,7 +178,7 @@ func (m *Model) runPullForRepo(repo *git.Repository, suppressSuccess bool) tea.C
 	}
 	repo.SetWorkStatus(git.Queued)
 	m.jobsRunning = true
-	return tickCmd()
+	return m.ensureTicking()
 }
 
 func (m *Model) runPushForRepo(repo *git.Repository, force bool, suppressSuccess bool, message string) tea.Cmd {
@@ -223,7 +223,7 @@ func (m *Model) runPushForRepo(repo *git.Repository, force bool, suppressSuccess
 	}
 	repo.SetWorkStatus(git.Queued)
 	m.jobsRunning = true
-	return tickCmd()
+	return m.ensureTicking()
 }
 
 // advanceForcePrompt moves to the next queued force-push prompt.
@@ -288,7 +288,7 @@ func (m *Model) startFetchForRepos(repos []*git.Repository) tea.Cmd {
 		return nil
 	}
 	m.jobsRunning = true
-	return tea.Batch(fetchRepositoriesCmd(eligible), tickCmd())
+	return tea.Batch(fetchRepositoriesCmd(eligible), m.ensureTicking())
 }
 
 func fetchRepositoriesCmd(repos []*git.Repository) tea.Cmd {
@@ -325,6 +325,9 @@ func (m *Model) maybeStartInitialStateEvaluation(repos []*git.Repository) tea.Cm
 		return nil
 	}
 	filtered := filterRepositories(reposToUse)
+	// Set flags synchronously in the Update goroutine to avoid races.
+	m.initialStateProbeStarted = true
+	m.jobsRunning = true
 	return func() tea.Msg {
 		for _, repo := range filtered {
 			if repo == nil {
@@ -336,8 +339,6 @@ func (m *Model) maybeStartInitialStateEvaluation(repos []*git.Repository) tea.Cm
 			repo.SetWorkStatusSilent(git.Pending)
 			command.ScheduleStateEvaluation(repo, command.OperationOutcome{Operation: command.OperationStateProbe})
 		}
-		m.initialStateProbeStarted = true
-		m.jobsRunning = true
 		return repositoriesWaitingMsg{}
 	}
 }

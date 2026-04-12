@@ -1,9 +1,6 @@
 package tui
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
@@ -79,16 +76,6 @@ func (m *Model) ensureRemoteCursorVisible(total, viewport int) {
 	ensureCursorVisible(&m.remoteBranchCursor, &m.remoteOffset, total, viewport)
 }
 
-func (m *Model) ensureCommitCursorVisible(total, viewport int) {
-	if viewport <= 0 {
-		viewport = 1
-	}
-	if viewport > total {
-		viewport = total
-	}
-	ensureCursorVisible(&m.commitCursor, &m.commitOffset, total, viewport)
-}
-
 // panelLineBudget returns the number of lines available for panel content.
 func (m *Model) panelLineBudget() int {
 	_, maxContentLines := m.popupDimensions()
@@ -121,7 +108,6 @@ func (m *Model) panelViewportSize(total int) int {
 	return remaining
 }
 
-func (m *Model) commitViewportSize(total int) int { return m.panelViewportSize(total) }
 func (m *Model) branchViewportSize(total int) int { return m.panelViewportSize(total) }
 func (m *Model) remoteViewportSize(total int) int { return m.panelViewportSize(total) }
 
@@ -203,138 +189,4 @@ func (m *Model) adjustCommitScroll(delta int) bool {
 
 // --- Commit detail scroll (vertical scrolling inside the commit panel) ---
 
-func (m *Model) repoKey(repo *git.Repository) string {
-	if repo == nil {
-		return ""
-	}
-	if repo.RepoID != "" {
-		return repo.RepoID
-	}
-	if repo.AbsPath != "" {
-		return repo.AbsPath
-	}
-	return repo.Name
-}
 
-func (m *Model) commitDetailKey(repo *git.Repository, commit *git.Commit, index int) string {
-	key := m.repoKey(repo)
-	if key == "" {
-		return ""
-	}
-	if commit != nil && commit.Hash != "" {
-		return key + ":" + commit.Hash
-	}
-	return fmt.Sprintf("%s:idx:%d", key, index)
-}
-
-func (m *Model) getCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int) int {
-	if m.commitDetailScroll == nil {
-		return 0
-	}
-	key := m.commitDetailKey(repo, commit, index)
-	if key == "" {
-		return 0
-	}
-	return m.commitDetailScroll[key]
-}
-
-func (m *Model) setCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int, offset int) {
-	key := m.commitDetailKey(repo, commit, index)
-	if key == "" {
-		return
-	}
-	if offset <= 0 {
-		if m.commitDetailScroll != nil {
-			delete(m.commitDetailScroll, key)
-		}
-		return
-	}
-	if m.commitDetailScroll == nil {
-		m.commitDetailScroll = make(map[string]int)
-	}
-	m.commitDetailScroll[key] = offset
-}
-
-func (m *Model) resetCommitDetailOffset(repo *git.Repository, commit *git.Commit, index int) {
-	if m.commitDetailScroll == nil {
-		return
-	}
-	key := m.commitDetailKey(repo, commit, index)
-	if key == "" {
-		return
-	}
-	delete(m.commitDetailScroll, key)
-}
-
-func (m *Model) resetCommitDetailScrollForIndex(repo *git.Repository, commits []*git.Commit, index int) {
-	if repo == nil || len(commits) == 0 || index < 0 || index >= len(commits) {
-		return
-	}
-	m.resetCommitDetailOffset(repo, commits[index], index)
-}
-
-func (m *Model) resetAllCommitDetailScroll(repo *git.Repository) {
-	if repo == nil || m.commitDetailScroll == nil {
-		return
-	}
-	prefix := m.repoKey(repo) + ":"
-	if prefix == ":" {
-		return
-	}
-	for key := range m.commitDetailScroll {
-		if strings.HasPrefix(key, prefix) {
-			delete(m.commitDetailScroll, key)
-		}
-	}
-}
-
-func (m *Model) commitPanelContentWidth() int {
-	popupWidth, _ := m.popupDimensions()
-	contentWidth := popupWidth - panelHorizontalFrame
-	if contentWidth < 1 {
-		contentWidth = 1
-	}
-	return contentWidth
-}
-
-func (m *Model) adjustCommitDetailScroll(delta int) bool {
-	if delta == 0 {
-		return false
-	}
-	repo := m.currentRepository()
-	if repo == nil || repo.State == nil || repo.State.Branch == nil {
-		return false
-	}
-	commits := repo.State.Branch.Commits
-	if len(commits) == 0 {
-		return false
-	}
-	index := clampIndex(m.commitCursor, len(commits))
-	commit := commits[index]
-	content := commitPanelLineContent(commit)
-	width := m.commitPanelContentWidth()
-	if width <= 0 {
-		return false
-	}
-	maxOffset := maxCommitOffset(content, width)
-	old := m.getCommitDetailOffset(repo, commit, index)
-	if maxOffset <= 0 {
-		if old != 0 {
-			m.resetCommitDetailOffset(repo, commit, index)
-			return true
-		}
-		return false
-	}
-	offset := old + delta
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > maxOffset {
-		offset = maxOffset
-	}
-	if offset == old {
-		return false
-	}
-	m.setCommitDetailOffset(repo, commit, index, offset)
-	return true
-}

@@ -83,7 +83,7 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return lazygitClosedMsg{repo: r, originalModTime: originalModTime, originalState: savedState}
 				})
 				if m.updateJobsRunningFlag() {
-					return m, tea.Batch(cmd, tickCmd())
+					return m, tea.Batch(cmd, m.ensureTicking())
 				}
 				return m, cmd
 			}

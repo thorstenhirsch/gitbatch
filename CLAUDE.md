@@ -32,7 +32,7 @@ Tests use `testify` for assertions. Many command tests require a real git repo c
 
 - **`cmd/gitbatch/`** — Entry point. Parses CLI flags (kingpin), creates `app.App`, calls `app.Run()`.
 - **`internal/app/`** — App orchestration. Config loading (viper, OS-specific paths), directory discovery, quick mode execution.
-- **`internal/git/`** — Core `Repository` type wrapping go-git. Event-driven pub/sub system with async event queues (git, state, log). Semaphore-based concurrency limiting (one slot per CPU core).
+- **`internal/git/`** — Core `Repository` type wrapping go-git. Event-driven pub/sub system with async event queues (git, state, log). Semaphore-based concurrency limiting (4x CPU cores, min 4).
 - **`internal/command/`** — Git command execution. Runs git via `exec.Command` with timeout/context support. Credential prompt detection (kills process on password prompt). Schedules work through `ScheduleGitCommand` → git event queue → state evaluation pipeline.
 - **`internal/tui/`** — Bubbletea Model with two views: Overview (repo table) and Focus (single repo detail). Side panels for branches, remotes, commits, stashes. Lipgloss styling.
 - **`internal/job/`** — Job abstraction mapping high-level operations (FetchJob, PullJob, etc.) to command execution.
@@ -41,7 +41,7 @@ Tests use `testify` for assertions. Many command tests require a real git repo c
 
 ### Key patterns
 
-**Event-driven concurrency:** Repositories use a pub/sub event system. Git commands, state evaluation, and trace logging each have their own async event queue. The git queue uses a global weighted semaphore (`runtime.GOMAXPROCS(0)` slots) to limit concurrent git operations.
+**Event-driven concurrency:** Repositories use a pub/sub event system. Git commands, state evaluation, and trace logging each have their own async event queue. The git queue uses a global weighted semaphore (`runtime.GOMAXPROCS(0) * 4` slots, min 4) to limit concurrent git operations.
 
 **Repository lifecycle:** `FastInitializeRepo` creates a minimal repo struct (used during loading). `InitializeRepo` adds full component loading (branches, remotes, stashes). Event queues start goroutines immediately on creation.
 
@@ -49,4 +49,4 @@ Tests use `testify` for assertions. Many command tests require a real git repo c
 
 **Hook registration:** Packages register `RepositoryHook` functions via `init()` (e.g., `command` package auto-attaches its git worker to every new repository).
 
-**TUI update loop:** Bubbletea model receives `RepositoryUpdateMsg` via a channel. Updates are throttled to ~60 FPS. The model polls for job completion status.
+**TUI update loop:** Bubbletea model receives `repositoryStateChangedMsg` via a buffered channel. Updates are throttled to ~60 FPS with burst draining. A single guarded tick chain (15 FPS) drives the spinner and job-completion polling; `ensureTicking()` prevents duplicate tick chains.

@@ -25,7 +25,7 @@ func main() {
 	kingpin.Parse()
 
 	if err := run(*dirs, *recursionDepth, *quick, *mode, *trace); err != nil {
-		fmt.Fprintf(os.Stderr, "application quitted with an unhandled error: %v", err)
+		fmt.Fprintf(os.Stderr, "application quit with an unhandled error: %v", err)
 		os.Exit(1)
 	}
 }

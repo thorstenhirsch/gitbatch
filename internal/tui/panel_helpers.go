@@ -20,13 +20,6 @@ type remotePanelEntry struct {
 	FullName   string
 }
 
-func shortHash(hash string) string {
-	if len(hash) > 7 {
-		return hash[:7]
-	}
-	return hash
-}
-
 func findBranchByName(repo *git.Repository, name string) *git.Branch {
 	if repo == nil {
 		return nil

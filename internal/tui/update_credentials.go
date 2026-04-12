@@ -187,7 +187,7 @@ func (m *Model) retryCredentialPrompt(prompt *credentialPrompt) tea.Cmd {
 	}
 	repo.SetWorkStatus(git.Queued)
 	m.jobsRunning = true
-	return tickCmd()
+	return m.ensureTicking()
 }
 
 // cloneJobWithCredentials duplicates a job and injects the provided credentials.
