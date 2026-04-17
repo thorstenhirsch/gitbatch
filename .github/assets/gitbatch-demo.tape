@@ -2,41 +2,74 @@ Output .github/assets/gitbatch-demo.gif
 
 Set Shell "bash"
 Set FontFamily "Menlo"
-Set FontSize 22
+Set FontSize 21
 Set Width 1400
 Set Height 900
 Set Theme "Builtin Dark"
-Set Framerate 30
+Set Framerate 24
 Set Padding 24
-Set TypingSpeed 70ms
+Set TypingSpeed 65ms
 
-Type "/tmp/gitbatch-demo-bin -d /tmp/gitbatch-demo/work"
+Require lazygit
+
+Hide
+Type "cd /Users/torti/src/gitbatch"
+Enter
+Type "export PATH=/Users/torti/src/gitbatch:$PATH"
+Enter
+Type "clear"
+Enter
+Show
+
+Type "gitbatch -d ../eth"
 Enter
 
-Sleep 5s
-Type "?"
-Sleep 2s
-Type "?"
-Sleep 1s
-Down 2
-Sleep 1s
-Type "S"
-Sleep 3s
-Escape
-Sleep 1s
-Up
-Sleep 1s
-Type "b"
-Sleep 2s
-Escape
-Sleep 1s
-Type "f"
-Sleep 4s
-Type "p"
-Sleep 5s
+Sleep 7s
+Down
+Sleep 600ms
+Down
+Sleep 600ms
 Down
 Sleep 1s
-Type "p"
+Tab
+Sleep 3s
+Type "q"
+Sleep 2s
+Space
+Sleep 1s
+Down
+Sleep 450ms
+Down
+Sleep 450ms
+Down
+Sleep 450ms
+Down
+Sleep 1s
+Space
+Sleep 1s
+Down
+Sleep 450ms
+Down
+Sleep 1s
+Space
+Sleep 2s
+Type "m"
+Sleep 1s
+Type "m"
+Sleep 1s
+Type "m"
+Sleep 2s
+Enter
+Sleep 5s
+Type "A"
+Sleep 1s
+Type "s"
 Sleep 4s
+Escape
+Sleep 1500ms
+Type "?"
+Sleep 4s
+Escape
+Sleep 2s
 Type "q"
 Sleep 2s
