@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -93,9 +94,44 @@ func (m *Model) unqueueAll() tea.Cmd {
 	}
 }
 
+// preBatchRefresh re-runs working-tree cleanliness on every queued repo
+// before the launch loop decides what to run. In pull/merge/rebase modes an
+// externally-dirtied tree could make the cached ff-safe decision wrong —
+// RefreshWorkingTreeSync demotes such repos to Available so the loop skips
+// them. For push/fetch, tree cleanliness does not gate the op, so the
+// refresh is skipped to avoid needless work.
+func (m *Model) preBatchRefresh() {
+	switch m.mode.ID {
+	case PullMode, MergeMode, RebaseMode:
+	default:
+		return
+	}
+
+	var queued []*git.Repository
+	for _, r := range m.repositories {
+		if r != nil && r.WorkStatus() == git.Queued {
+			queued = append(queued, r)
+		}
+	}
+	if len(queued) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, r := range queued {
+		wg.Add(1)
+		go func(repo *git.Repository) {
+			defer wg.Done()
+			command.RefreshWorkingTreeSync(repo)
+		}(r)
+	}
+	wg.Wait()
+}
+
 // startQueue starts jobs for all queued repositories.
 func (m *Model) startQueue() tea.Cmd {
 	return func() tea.Msg {
+		m.preBatchRefresh()
 		for _, r := range m.repositories {
 			if r.WorkStatus() != git.Queued {
 				continue

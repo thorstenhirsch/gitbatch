@@ -17,6 +17,10 @@ func (m *Model) activatePanel(panel SidePanelType) {
 
 	repo := m.currentRepository()
 
+	if panel == StatusPanel && repo != nil && !repo.WorkStatus().InFlight() {
+		command.RequestExternalRefresh(repo)
+	}
+
 	switch panel {
 	case BranchPanel:
 		items := m.branchPanelItems()

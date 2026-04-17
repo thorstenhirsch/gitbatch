@@ -163,7 +163,7 @@ func (m *Model) adjustCommitScroll(delta int) bool {
 	if contentWidth <= 0 {
 		return false
 	}
-	content := commitContentForRepo(repo)
+	content := m.commitContentForRepo(repo)
 	maxOffset := maxCommitOffset(content, contentWidth)
 	old := m.getCommitScrollOffset(repo)
 	if maxOffset <= 0 {

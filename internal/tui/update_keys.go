@@ -247,6 +247,9 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.activatePanel(RemotePanel)
 
+	case "R":
+		return m, m.focusRefreshCmd(true)
+
 	case "s":
 		if !m.requiresSingleSelection("Status view unavailable for tagged selection") {
 			return m, nil

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 	"github.com/thorstenhirsch/gitbatch/internal/job"
+	"github.com/thorstenhirsch/gitbatch/internal/watch"
 )
 
 // Model represents the main application state for Bubbletea
@@ -66,6 +67,7 @@ type Model struct {
 	cachedColWidths columnWidths
 	cachedWidth     int
 	cachedRepoCount int
+	displayCache    map[string]*repoDisplayEntry
 
 	// Styles
 	styles *Styles
@@ -75,6 +77,10 @@ type Model struct {
 	updateMu           sync.Mutex
 	lastUpdateCheck    time.Time
 	lastJobCheck       time.Time
+	lastFocusRefresh   time.Time
+
+	// External-change watcher; nil if construction failed.
+	watcher *watch.Service
 }
 
 // columnWidths holds the calculated widths for table columns
@@ -324,6 +330,7 @@ func New(mode string, directories []string) *Model {
 		version:            Version,
 		commitScrollOffsets: make(map[string]int),
 		repositoryUpdateCh: make(chan struct{}, 256),
+		displayCache:       make(map[string]*repoDisplayEntry),
 	}
 }
 

@@ -189,6 +189,33 @@ func ScheduleRepositoryRefresh(r *git.Repository, outcome *OperationOutcome) err
 	return r.Publish(git.RepositoryRefreshRequested, outcome)
 }
 
+// RequestExternalRefresh hands off a repository to the standard refresh
+// pipeline after an external change is detected (lazygit exit, fsnotify
+// event, terminal focus-gain, status-panel open). No-op if the repo is
+// already mid-operation.
+func RequestExternalRefresh(r *git.Repository) {
+	if r == nil || r.State == nil || r.WorkStatus().InFlight() {
+		return
+	}
+	r.State.Message = "waiting"
+	r.SetWorkStatus(git.Pending)
+	r.NotifyRepositoryUpdated()
+	_ = ScheduleRepositoryRefresh(r, nil)
+}
+
+// RefreshWorkingTreeSync synchronously re-evaluates working-tree cleanliness
+// (HasLocalChanges, HasConflicts) and branch ahead/behind counts. Callers
+// that need fresh state before making a decision — e.g. pre-batch-op
+// refresh — should use this rather than the async RequestExternalRefresh.
+//
+// Respects the global git semaphore. In-flight repos are skipped.
+func RefreshWorkingTreeSync(r *git.Repository) {
+	if r == nil || r.State == nil || r.WorkStatus().InFlight() {
+		return
+	}
+	applyCleanlinessAsync(r)
+}
+
 type stateSnapshot struct {
 	status  git.WorkStatus
 	message string

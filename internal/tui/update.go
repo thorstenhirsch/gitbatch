@@ -9,6 +9,11 @@ import (
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
+// focusRefreshDebounce caps how often a terminal focus-gain triggers a
+// working-tree refresh across all repos. Rapid alt-tabs should not cause
+// repeated fan-outs.
+const focusRefreshDebounce = 5 * time.Second
+
 const (
 	// TargetFPS is the maximum frames per second for the UI.
 	TargetFPS = 60
@@ -146,18 +151,56 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case errMsg:
 		m.err = msg.err
 		return m, nil
+
+	case tea.FocusMsg:
+		return m, m.focusRefreshCmd(false)
+
+	case tea.BlurMsg:
+		return m, nil
 	}
 
 	return m, nil
 }
 
+// focusRefreshCmd returns a Cmd that fans out a working-tree refresh to every
+// loaded repo when the user returns to gitbatch (e.g. alt-tab from an editor).
+// The debounce check runs synchronously on the Update goroutine; the actual
+// fan-out runs in the returned Cmd's goroutine so user input and rendering are
+// not blocked even across dozens of repos.
+//
+// If force is true the debounce is bypassed (used by the manual refresh key).
+// In-flight repos are skipped; the git semaphore inside the refresh pipeline
+// caps concurrency globally.
+func (m *Model) focusRefreshCmd(force bool) tea.Cmd {
+	m.updateMu.Lock()
+	if !force && !m.lastFocusRefresh.IsZero() && time.Since(m.lastFocusRefresh) < focusRefreshDebounce {
+		m.updateMu.Unlock()
+		return nil
+	}
+	m.lastFocusRefresh = time.Now()
+	m.updateMu.Unlock()
+
+	repos := make([]*git.Repository, len(m.repositories))
+	copy(repos, m.repositories)
+
+	return func() tea.Msg {
+		for _, r := range repos {
+			if r == nil || r.WorkStatus().InFlight() {
+				continue
+			}
+			command.RequestExternalRefresh(r)
+		}
+		return nil
+	}
+}
+
 func (m *Model) handleLazygitClosed(msg lazygitClosedMsg) (tea.Model, tea.Cmd) {
 	repo := msg.repo
 	if repo.RefreshModTime().After(msg.originalModTime) {
-		repo.State.Message = "waiting"
-		repo.SetWorkStatus(git.Pending)
-		repo.NotifyRepositoryUpdated()
-		_ = command.ScheduleRepositoryRefresh(repo, nil)
+		// The TAB handler set Working as a lock while lazygit ran. Clear it so
+		// RequestExternalRefresh (which skips InFlight repos) can actually run.
+		repo.SetWorkStatusSilent(git.Available)
+		command.RequestExternalRefresh(repo)
 		m.jobsRunning = true
 		return m, m.ensureTicking()
 	}
@@ -188,6 +231,10 @@ func (m *Model) addRepository(r *git.Repository) {
 		m.enqueueRepositoryUpdate()
 		return nil
 	})
+
+	if m.watcher != nil {
+		m.watcher.Register(r)
+	}
 
 	m.repositories = rs
 }

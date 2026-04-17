@@ -740,7 +740,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 		commitContentWidth = 0
 	}
 
-	fullCommitContent := commitContentForRepo(r)
+	fullCommitContent := m.commitContentForRepo(r)
 	offset := m.getCommitScrollOffset(r)
 	maxOffset := maxCommitOffset(fullCommitContent, commitContentWidth)
 	if offset > maxOffset {
@@ -867,24 +867,12 @@ func (m *Model) renderExpandedBranchLine(r *git.Repository, branch *git.Branch, 
 	if commitContentWidth < 0 {
 		commitContentWidth = 0
 	}
-	commitStr := branchCommitContent(r, branch)
+	commitStr := m.branchCommitContent(r, branch)
 	commitStr = truncateString(commitStr, commitContentWidth)
 	commitColumn := style.Render(fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitStr))
 
 	border := m.styles.TableBorder.Render("│")
 	return border + repoColumn + border + branchColumn + border + commitColumn + border
-}
-
-// branchCommitContent returns the last commit message for a specific branch.
-func branchCommitContent(r *git.Repository, branch *git.Branch) string {
-	if r == nil || branch == nil || branch.Reference == nil {
-		return ""
-	}
-	commitObj, err := r.Repo.CommitObject(branch.Reference.Hash())
-	if err != nil {
-		return ""
-	}
-	return firstLine(commitObj.Message)
 }
 
 func commitSummary(r *git.Repository) (string, plumbing.Hash) {
@@ -951,26 +939,6 @@ func collectTags(r *git.Repository, commitHash plumbing.Hash) []string {
 	}
 
 	return tags
-}
-
-func commitContentForRepo(r *git.Repository) string {
-	if r == nil {
-		return ""
-	}
-	if r.WorkStatus() == git.Fail && r.State != nil && r.State.Message != "" {
-		return singleLineMessage(r.State.Message)
-	}
-
-	commitMsg, commitHash := commitSummary(r)
-	tags := collectTags(r, commitHash)
-	parts := make([]string, 0, 2)
-	if len(tags) > 0 {
-		parts = append(parts, "["+strings.Join(tags, ", ")+"]")
-	}
-	if commitMsg != "" {
-		parts = append(parts, commitMsg)
-	}
-	return strings.Join(parts, " ")
 }
 
 func maxCommitOffset(content string, width int) int {

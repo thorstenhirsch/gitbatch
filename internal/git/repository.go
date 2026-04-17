@@ -61,6 +61,13 @@ type WorkStatus struct {
 	Ready  bool
 }
 
+// InFlight reports whether the repository is mid-operation and should not be
+// targeted by external-change detectors (fsnotify, poller). Fail deliberately
+// returns false so the user can recover by fixing the working tree.
+func (ws WorkStatus) InFlight() bool {
+	return ws == Pending || ws == Queued || ws == Working
+}
+
 var (
 	// Available implies repo is ready for the operation
 	Available = WorkStatus{Status: 0, Ready: true}
