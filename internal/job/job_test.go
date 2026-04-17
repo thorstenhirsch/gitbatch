@@ -85,7 +85,6 @@ func TestFetchJobPreservesErrorState(t *testing.T) {
 		return repo.State.Branch.Upstream == nil
 	}, 3*time.Second, 25*time.Millisecond, "upstream should become nil after refresh")
 
-
 	job := &Job{JobType: FetchJob, Repository: repo}
 	require.NoError(t, job.Start())
 
@@ -93,4 +92,46 @@ func TestFetchJobPreservesErrorState(t *testing.T) {
 		return repo.WorkStatus() == git.Fail
 	}, 2*time.Second, 50*time.Millisecond)
 	require.Contains(t, strings.ToLower(repo.State.Message), "upstream")
+}
+
+func TestStartRequiresInitializedJob(t *testing.T) {
+	tests := []struct {
+		name string
+		job  *Job
+	}{
+		{
+			name: "nil job",
+			job:  nil,
+		},
+		{
+			name: "nil repository",
+			job:  &Job{},
+		},
+		{
+			name: "nil repository state",
+			job: &Job{
+				Repository: &git.Repository{},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.job.Start()
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestStartUnknownJobTypeLeavesRepositoryAvailable(t *testing.T) {
+	th := gittest.InitTestRepositoryFromLocal(t)
+	defer th.CleanUp(t)
+
+	job := &Job{
+		JobType:    Type("unknown"),
+		Repository: th.Repository,
+	}
+
+	require.NoError(t, job.Start())
+	require.Equal(t, git.Available, th.Repository.WorkStatus())
 }

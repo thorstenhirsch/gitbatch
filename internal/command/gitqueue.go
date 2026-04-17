@@ -14,6 +14,7 @@ import (
 type GitCommandFunc func(ctx context.Context) OperationOutcome
 
 const DefaultGitCommandTimeout = 10 * time.Second
+const watchRefreshSuppressWindow = 2 * time.Second
 
 // DynamicTimeout calculates a timeout that scales with the number of changes.
 // For every 100 changes the base timeout is added once more, so the result is
@@ -116,6 +117,7 @@ func startGitOperation(r *git.Repository, operation OperationType) {
 	if r == nil {
 		return
 	}
+	r.SuppressWatchRefreshFor(watchRefreshSuppressWindow)
 	message := "running git command..."
 	switch operation {
 	case OperationFetch:

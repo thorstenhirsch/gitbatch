@@ -39,104 +39,26 @@ func operate(directory, mode string) error {
 	if err != nil {
 		return err
 	}
-	remoteName := "origin"
-	if r.State.Remote != nil && r.State.Remote.Name != "" {
-		remoteName = r.State.Remote.Name
-	}
+	executor := command.NewExecutor(r)
 	switch mode {
 	case "fetch":
-		msg, err := command.Fetch(r, &command.FetchOptions{
-			RemoteName: remoteName,
-			Progress:   true,
-			Timeout:    command.DefaultFetchTimeout,
+		return executor.RunFetch(nil, &command.FetchOptions{
+			Progress: true,
 		})
-		if err != nil {
-			command.ScheduleStateEvaluation(r, command.OperationOutcome{
-				Operation: command.OperationFetch,
-				Err:       err,
-			})
-			return err
-		}
-		command.ScheduleStateEvaluation(r, command.OperationOutcome{
-			Operation: command.OperationFetch,
-			Message:   msg,
-		})
-		return nil
 	case "pull":
-		msg, err := command.Pull(r, &command.PullOptions{
-			RemoteName:    remoteName,
-			Progress:      true,
-			ReferenceName: git.UpstreamBranchName(r),
-			FFOnly:        true,
-		})
-		if err != nil {
-			command.ScheduleStateEvaluation(r, command.OperationOutcome{
-				Operation: command.OperationPull,
-				Err:       err,
-			})
-			return err
-		}
-		command.ScheduleStateEvaluation(r, command.OperationOutcome{
-			Operation: command.OperationPull,
-			Message:   msg,
-		})
-		return nil
+		return executor.RunPull(nil, &command.PullOptions{
+			Progress: true,
+			FFOnly:   true,
+		}, false)
 	case "merge":
-		if r.State.Branch.Upstream == nil {
-			return fmt.Errorf("upstream not set")
-		}
-		msg, err := command.Merge(r, &command.MergeOptions{
-			BranchName: r.State.Branch.Upstream.Name,
-		})
-		if err != nil {
-			command.ScheduleStateEvaluation(r, command.OperationOutcome{
-				Operation: command.OperationMerge,
-				Err:       err,
-			})
-			return err
-		}
-		command.ScheduleStateEvaluation(r, command.OperationOutcome{
-			Operation: command.OperationMerge,
-			Message:   msg,
-		})
-		return nil
+		return executor.RunMerge(nil, nil)
 	case "rebase":
-		msg, err := command.Pull(r, &command.PullOptions{
-			RemoteName:    remoteName,
-			Progress:      true,
-			ReferenceName: git.UpstreamBranchName(r),
-			Rebase:        true,
+		return executor.RunRebase(nil, &command.PullOptions{
+			Progress: true,
+			Rebase:   true,
 		})
-		if err != nil {
-			command.ScheduleStateEvaluation(r, command.OperationOutcome{
-				Operation: command.OperationRebase,
-				Err:       err,
-			})
-			return err
-		}
-		command.ScheduleStateEvaluation(r, command.OperationOutcome{
-			Operation: command.OperationRebase,
-			Message:   msg,
-		})
-		return nil
 	case "push":
-		msg, err := command.Push(r, &command.PushOptions{
-			RemoteName:    remoteName,
-			ReferenceName: git.UpstreamBranchName(r),
-		})
-		if err != nil {
-			command.ScheduleStateEvaluation(r, command.OperationOutcome{
-				Operation: command.OperationPush,
-				Err:       err,
-			})
-			return err
-		}
-		command.ScheduleStateEvaluation(r, command.OperationOutcome{
-			Operation: command.OperationPush,
-			Message:   msg,
-		})
-		return nil
+		return executor.RunPush(nil, nil, false)
 	}
 	return fmt.Errorf("unsupported mode: %s", mode)
 }
-

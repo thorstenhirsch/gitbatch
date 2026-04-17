@@ -44,22 +44,24 @@ func (jq *Queue) AddJob(j *Job) error {
 	return nil
 }
 
-// StartNext starts the next job in the queue
-func (jq *Queue) StartNext() (j *Job, finished bool, err error) {
+// StartNext starts the next job in the queue.
+func (jq *Queue) StartNext() (*Job, error) {
 	jq.mu.Lock()
-	if len(jq.series) < 1 {
+	if len(jq.series) == 0 {
 		jq.mu.Unlock()
-		return nil, true, nil
+		return nil, nil
 	}
 	i := len(jq.series) - 1
 	lastJob := jq.series[i]
 	jq.series = jq.series[:i]
 	key := jobKey(lastJob.Repository.RepoID, lastJob.JobType)
 	delete(jq.index, key)
-	if err = lastJob.Start(); err != nil {
-		return lastJob, finished, err
+	jq.mu.Unlock()
+
+	if err := lastJob.Start(); err != nil {
+		return lastJob, err
 	}
-	return lastJob, finished, nil
+	return lastJob, nil
 }
 
 // RemoveFromQueue deletes the given entity and its job from the queue
@@ -124,8 +126,8 @@ func (jq *Queue) StartJobsAsync() map[*Job]error {
 		go func() {
 			defer wg.Done()
 
-			j, finished, err := jq.StartNext()
-			if finished {
+			j, err := jq.StartNext()
+			if j == nil {
 				return
 			}
 			if err != nil {

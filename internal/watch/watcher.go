@@ -204,6 +204,9 @@ func (fw *fsWatcher) scheduleRefresh(entry *watched) {
 		fw.mu.Lock()
 		entry.timer = nil
 		fw.mu.Unlock()
+		if entry.repo.WatchRefreshSuppressed() {
+			return
+		}
 		command.RequestExternalRefresh(entry.repo)
 	})
 }

@@ -81,3 +81,26 @@ func TestFSWatcherFiltersIrrelevantFiles(t *testing.T) {
 	require.Equal(t, git.Available, repo.WorkStatus(),
 		"writes to unwatched basenames should not trigger refresh")
 }
+
+func TestFSWatcherSuppressesInternalRefreshWindow(t *testing.T) {
+	helper := gittest.InitTestRepositoryFromLocal(t)
+	defer helper.CleanUp(t)
+	repo := helper.Repository
+	repo.SetWorkStatus(git.Available)
+	repo.SuppressWatchRefreshFor(2 * time.Second)
+
+	fw, err := newFSWatcher()
+	require.NoError(t, err)
+	defer fw.close()
+
+	fw.register(repo)
+
+	headPath := filepath.Join(repo.AbsPath, ".git", "HEAD")
+	content, err := os.ReadFile(headPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(headPath, content, 0644))
+
+	time.Sleep(fsnotifyDebounce + 500*time.Millisecond)
+	require.Equal(t, git.Available, repo.WorkStatus(),
+		"writes during suppression window should not trigger refresh")
+}

@@ -20,19 +20,19 @@ func init() {
 type OperationType string
 
 const (
-	OperationFetch       OperationType = "fetch"
-	OperationPull        OperationType = "pull"
-	OperationMerge       OperationType = "merge"
-	OperationRebase      OperationType = "rebase"
-	OperationPush        OperationType = "push"
-	OperationCommit      OperationType = "commit"
-	OperationStash       OperationType = "stash"
-	OperationStashPop    OperationType = "stash-pop"
-	OperationStashDrop   OperationType = "stash-drop"
-	OperationRefresh     OperationType = "refresh"
-	OperationGit         OperationType = "git"
-	OperationStateProbe  OperationType = "state-probe"
-	OperationNoUpstream  OperationType = "no-upstream"
+	OperationFetch      OperationType = "fetch"
+	OperationPull       OperationType = "pull"
+	OperationMerge      OperationType = "merge"
+	OperationRebase     OperationType = "rebase"
+	OperationPush       OperationType = "push"
+	OperationCommit     OperationType = "commit"
+	OperationStash      OperationType = "stash"
+	OperationStashPop   OperationType = "stash-pop"
+	OperationStashDrop  OperationType = "stash-drop"
+	OperationRefresh    OperationType = "refresh"
+	OperationGit        OperationType = "git"
+	OperationStateProbe OperationType = "state-probe"
+	OperationNoUpstream OperationType = "no-upstream"
 )
 
 // OperationOutcome captures the result of an operation for state evaluation.
@@ -165,6 +165,7 @@ func AttachStateEvaluator(r *git.Repository) {
 		// Only schedule a refresh if the operation succeeded.
 		// Refreshing after an error would overwrite the error state.
 		if outcome.Err == nil && outcome.Operation != OperationRefresh && outcome.Operation != OperationStateProbe && stateChanged(prev, r) {
+			r.SuppressWatchRefreshFor(watchRefreshSuppressWindow)
 			_ = ScheduleRepositoryRefresh(r, nil)
 		}
 		return nil

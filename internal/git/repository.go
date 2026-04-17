@@ -32,6 +32,8 @@ type Repository struct {
 	mutex     sync.RWMutex
 	listeners map[string][]RepositoryListener
 	queues    map[eventQueueType]*eventQueue
+
+	watchRefreshSuppressedUntil time.Time
 }
 
 // RepositoryState is the current pointers of a repository
@@ -484,6 +486,33 @@ func (r *Repository) NotifyRepositoryUpdated() {
 		return
 	}
 	_ = r.Publish(RepositoryUpdated, nil)
+}
+
+// SuppressWatchRefreshFor ignores fsnotify-driven refresh requests for the
+// given duration. This is used when gitbatch itself is mutating .git files, so
+// the watcher does not immediately schedule a redundant external refresh.
+func (r *Repository) SuppressWatchRefreshFor(d time.Duration) {
+	if r == nil || d <= 0 {
+		return
+	}
+	until := time.Now().Add(d)
+	r.mutex.Lock()
+	if until.After(r.watchRefreshSuppressedUntil) {
+		r.watchRefreshSuppressedUntil = until
+	}
+	r.mutex.Unlock()
+}
+
+// WatchRefreshSuppressed reports whether fsnotify-driven refresh requests
+// should currently be ignored for this repository.
+func (r *Repository) WatchRefreshSuppressed() bool {
+	if r == nil {
+		return false
+	}
+	r.mutex.RLock()
+	until := r.watchRefreshSuppressedUntil
+	r.mutex.RUnlock()
+	return time.Now().Before(until)
 }
 
 func (r *Repository) String() string {
