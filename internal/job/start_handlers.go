@@ -18,51 +18,46 @@ var jobStarters = map[Type]jobStarter{
 	StashDropJob: startStashDropJob,
 }
 
+// The per-operation "running..." status message is set by command.startGitOperation
+// when the git queue worker picks up the request; these starters only translate
+// the Options payload into the typed command options.
+
 func startFetchJob(j *Job) error {
-	j.Repository.State.Message = "fetching.."
 	return command.NewExecutor(j.Repository).ScheduleFetch(resolveFetchOptions(j.Options))
 }
 
 func startPullJob(j *Job) error {
-	j.Repository.State.Message = "pulling.."
 	opts, suppress := resolvePullJobConfig(j.Options)
 	return command.NewExecutor(j.Repository).SchedulePull(opts, suppress)
 }
 
 func startMergeJob(j *Job) error {
-	j.Repository.State.Message = "merging.."
 	return command.NewExecutor(j.Repository).ScheduleMerge(nil)
 }
 
 func startRebaseJob(j *Job) error {
-	j.Repository.State.Message = "rebasing.."
 	opts, _ := resolvePullJobConfig(j.Options)
 	return command.NewExecutor(j.Repository).ScheduleRebase(opts)
 }
 
 func startPushJob(j *Job) error {
-	j.Repository.State.Message = "pushing.."
 	opts, suppress := resolvePushJobConfig(j.Options)
 	return command.NewExecutor(j.Repository).SchedulePush(opts, suppress)
 }
 
 func startCommitJob(j *Job) error {
-	j.Repository.State.Message = "committing.."
 	return command.NewExecutor(j.Repository).ScheduleCommit(resolveCommitOptions(j.Options))
 }
 
 func startStashJob(j *Job) error {
-	j.Repository.State.Message = "stashing.."
 	return command.NewExecutor(j.Repository).ScheduleStash(resolveStashOptions(j.Options))
 }
 
 func startStashPopJob(j *Job) error {
-	j.Repository.State.Message = "popping stash.."
 	return command.NewExecutor(j.Repository).ScheduleStashPop(resolveStashPopOptions(j.Options))
 }
 
 func startStashDropJob(j *Job) error {
-	j.Repository.State.Message = "dropping stash.."
 	return command.NewExecutor(j.Repository).ScheduleStashDrop(resolveStashDropOptions(j.Options))
 }
 

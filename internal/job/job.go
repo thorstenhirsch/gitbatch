@@ -59,7 +59,6 @@ type PullJobConfig struct {
 type PushJobConfig struct {
 	Options         *command.PushOptions
 	SuppressSuccess bool
-	AllowForce      bool
 }
 
 // Start executes the job by scheduling the appropriate git command.

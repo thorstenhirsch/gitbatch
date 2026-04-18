@@ -33,8 +33,14 @@ type Repository struct {
 	listeners map[string][]RepositoryListener
 	queues    map[eventQueueType]*eventQueue
 
-	watchRefreshSuppressedUntil time.Time
+	watchSuppressCount      int
+	watchSuppressGraceUntil time.Time
 }
+
+// watchSuppressGrace keeps fsnotify suppression active briefly past the last
+// EndWatchSuppress so the watcher's debounced dispatch doesn't race with our
+// own writes.
+const watchSuppressGrace = 1 * time.Second
 
 // RepositoryState is the current pointers of a repository
 type RepositoryState struct {
@@ -488,17 +494,31 @@ func (r *Repository) NotifyRepositoryUpdated() {
 	_ = r.Publish(RepositoryUpdated, nil)
 }
 
-// SuppressWatchRefreshFor ignores fsnotify-driven refresh requests for the
-// given duration. This is used when gitbatch itself is mutating .git files, so
-// the watcher does not immediately schedule a redundant external refresh.
-func (r *Repository) SuppressWatchRefreshFor(d time.Duration) {
-	if r == nil || d <= 0 {
+// BeginWatchSuppress marks the start of a code path that may write .git files.
+// While any suppression is in flight, fsnotify-driven refresh requests are
+// ignored. Pair with EndWatchSuppress, typically via defer.
+func (r *Repository) BeginWatchSuppress() {
+	if r == nil {
 		return
 	}
-	until := time.Now().Add(d)
 	r.mutex.Lock()
-	if until.After(r.watchRefreshSuppressedUntil) {
-		r.watchRefreshSuppressedUntil = until
+	r.watchSuppressCount++
+	r.mutex.Unlock()
+}
+
+// EndWatchSuppress releases one suppression started with BeginWatchSuppress.
+// When the in-flight count returns to zero, a short grace period keeps
+// suppression active to cover the fsnotify debounce window.
+func (r *Repository) EndWatchSuppress() {
+	if r == nil {
+		return
+	}
+	r.mutex.Lock()
+	if r.watchSuppressCount > 0 {
+		r.watchSuppressCount--
+	}
+	if r.watchSuppressCount == 0 {
+		r.watchSuppressGraceUntil = time.Now().Add(watchSuppressGrace)
 	}
 	r.mutex.Unlock()
 }
@@ -510,9 +530,10 @@ func (r *Repository) WatchRefreshSuppressed() bool {
 		return false
 	}
 	r.mutex.RLock()
-	until := r.watchRefreshSuppressedUntil
+	count := r.watchSuppressCount
+	graceUntil := r.watchSuppressGraceUntil
 	r.mutex.RUnlock()
-	return time.Now().Before(until)
+	return count > 0 || time.Now().Before(graceUntil)
 }
 
 func (r *Repository) String() string {

@@ -36,6 +36,9 @@ func AttachRefreshExecutor(r *git.Repository) {
 			}
 			defer git.ReleaseGitSemaphore()
 
+			r.BeginWatchSuppress()
+			defer r.EndWatchSuppress()
+
 			err := r.Refresh()
 			if err != nil {
 				ScheduleStateEvaluation(r, OperationOutcome{

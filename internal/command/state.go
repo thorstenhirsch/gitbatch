@@ -165,7 +165,6 @@ func AttachStateEvaluator(r *git.Repository) {
 		// Only schedule a refresh if the operation succeeded.
 		// Refreshing after an error would overwrite the error state.
 		if outcome.Err == nil && outcome.Operation != OperationRefresh && outcome.Operation != OperationStateProbe && stateChanged(prev, r) {
-			r.SuppressWatchRefreshFor(watchRefreshSuppressWindow)
 			_ = ScheduleRepositoryRefresh(r, nil)
 		}
 		return nil
@@ -421,6 +420,11 @@ func applyCleanlinessAsync(r *git.Repository) {
 	if r.State.Branch == nil {
 		return
 	}
+	// git status may touch the index stat cache, and fastForwardDryRunSucceeds
+	// runs merge-tree --write-tree. Suppress fsnotify for the duration so the
+	// watcher doesn't treat our own writes as an external change.
+	r.BeginWatchSuppress()
+	defer r.EndWatchSuppress()
 	// Refresh ahead/behind counts before acquiring the semaphore. initBranches()
 	// runs before the initial fetch so Pullables is stale on the first run.
 	// git for-each-ref is read-only and lightweight; no semaphore needed.

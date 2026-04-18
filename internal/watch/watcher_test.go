@@ -87,7 +87,8 @@ func TestFSWatcherSuppressesInternalRefreshWindow(t *testing.T) {
 	defer helper.CleanUp(t)
 	repo := helper.Repository
 	repo.SetWorkStatus(git.Available)
-	repo.SuppressWatchRefreshFor(2 * time.Second)
+	repo.BeginWatchSuppress()
+	defer repo.EndWatchSuppress()
 
 	fw, err := newFSWatcher()
 	require.NoError(t, err)
