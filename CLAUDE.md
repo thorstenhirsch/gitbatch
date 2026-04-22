@@ -34,9 +34,10 @@ Tests use `testify` for assertions. Many command tests require a real git repo c
 - **`internal/app/`** — App orchestration. Config loading (viper, OS-specific paths), directory discovery, quick mode execution.
 - **`internal/git/`** — Core `Repository` type wrapping go-git. Event-driven pub/sub system with async event queues (git, state, log). Semaphore-based concurrency limiting (4x CPU cores, min 4).
 - **`internal/command/`** — Git command execution. Runs git via `exec.Command` with timeout/context support. Credential prompt detection (kills process on password prompt). Schedules work through `ScheduleGitCommand` → git event queue → state evaluation pipeline.
-- **`internal/tui/`** — Bubbletea Model with two views: Overview (repo table) and Focus (single repo detail). Side panels for branches, remotes, commits, stashes. Lipgloss styling.
+- **`internal/tui/`** — Bubbletea Model. Overview (repo table) with side panels for branches, remotes, status, stashes. Lipgloss styling.
 - **`internal/job/`** — Job abstraction mapping high-level operations (FetchJob, PullJob, etc.) to command execution.
 - **`internal/load/`** — Parallel repo initialization using worker pool pattern.
+- **`internal/watch/`** — File-change detection (fsnotify with polling fallback for containers). Debounces `.git` writes and drives automatic refresh.
 - **`internal/errors/`** — Custom error types for git operations and credential detection.
 
 ### Key patterns

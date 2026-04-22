@@ -16,9 +16,8 @@ func main() {
 	tui.Version = version
 
 	dirs := kingpin.Flag("directory", "Directory(s) to roam for git repositories.").Short('d').Strings()
-	mode := kingpin.Flag("mode", "Application start mode, more sensible with quick run.").Short('m').String()
+	mode := kingpin.Flag("mode", "Operation mode: fetch, pull, merge, rebase, push.").Short('m').String()
 	recursionDepth := kingpin.Flag("recursive-depth", "Find directories recursively.").Default("0").Short('r').Int()
-	_ = kingpin.Flag("log-level", "Logging level; trace,debug,info,warn,error").Default("error").Short('l').String()
 	quick := kingpin.Flag("quick", "Runs without gui and fetches/pull remote upstream.").Short('q').Bool()
 	trace := kingpin.Flag("trace", "Trace application events to gitbatch.log").Short('t').Bool()
 

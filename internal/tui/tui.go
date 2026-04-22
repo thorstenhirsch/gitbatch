@@ -20,10 +20,9 @@ func Run(mode string, directories []string) error {
 	log.SetOutput(io.Discard)
 
 	m := New(mode, directories)
-	if svc, err := watch.New(); err == nil {
-		m.watcher = svc
-		defer svc.Close()
-	}
+	svc := watch.New()
+	m.watcher = svc
+	defer svc.Close()
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithReportFocus())
 

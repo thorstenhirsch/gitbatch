@@ -9,6 +9,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRefreshModTime_NilBranch(t *testing.T) {
+	th := InitTestRepositoryFromLocal(t)
+	defer th.CleanUp(t)
+
+	r := th.Repository
+	// Temporarily clear State.Branch to simulate fast-initialized or detached-HEAD repos
+	orig := r.State.Branch
+	r.State.Branch = nil
+	defer func() { r.State.Branch = orig }()
+
+	// Must not panic
+	modTime := r.RefreshModTime()
+	assert.False(t, modTime.IsZero())
+}
+
 func TestRefreshModTime_BranchSwitch(t *testing.T) {
 	th := InitTestRepositoryFromLocal(t)
 	defer th.CleanUp(t)

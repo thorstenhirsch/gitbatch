@@ -39,7 +39,7 @@ func TestWalkRecursive(t *testing.T) {
 		{
 			[]string{th.RepoPath},
 			[]string{""},
-			[]string{filepath.Join(th.RepoPath, ".git"), filepath.Join(th.RepoPath, ".gitmodules"), th.NonRepoPath()},
+			[]string{filepath.Join(th.RepoPath, ".git"), th.NonRepoPath()},
 			[]string{"", th.BasicRepoPath(), th.DirtyRepoPath()},
 		},
 	}
@@ -66,7 +66,7 @@ func TestSeparateDirectories(t *testing.T) {
 		},
 		{
 			th.RepoPath,
-			[]string{filepath.Join(th.RepoPath, ".git"), filepath.Join(th.RepoPath, ".gitmodules"), th.NonRepoPath()},
+			[]string{filepath.Join(th.RepoPath, ".git"), th.NonRepoPath()},
 			[]string{th.BasicRepoPath(), th.DirtyRepoPath()},
 		},
 	}

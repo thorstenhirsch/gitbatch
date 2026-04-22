@@ -1805,12 +1805,12 @@ Actions:     Space   toggle queue        Enter   start queue
              m       cycle mode          Tab     open lazygit
 
 Views:       b  branches    r  remotes    B  expand branches
-             s  status      ESC back (from views)
+             s  status      R  force refresh   ESC back
 
 Sorting:     n  by name     t  by time
 
 Git:         f  fetch repo   p  pull repo   P  push repo
-             c  commit       S  stash       (both: stage all)
+             c  commit / clear error        S  stash
              O  pop stash    D  drop stash
 Other:       ?  help         q/Ctrl+C  quit
 `

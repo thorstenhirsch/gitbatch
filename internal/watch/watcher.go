@@ -13,23 +13,8 @@ import (
 	"github.com/thorstenhirsch/gitbatch/internal/git"
 )
 
-// fsnotifyDebounce coalesces the 3–5 file writes a single git operation
-// produces (HEAD + index + refs/heads/<branch> + maybe packed-refs).
-const fsnotifyDebounce = 500 * time.Millisecond
-
-// gitFiles is the basename allow-list for events directly under .git/. Events
-// on anything else (objects/, logs/, hooks/) are noise for our state model.
-var gitFiles = map[string]struct{}{
-	"HEAD":        {},
-	"index":       {},
-	"FETCH_HEAD":  {},
-	"ORIG_HEAD":   {},
-	"MERGE_HEAD":  {},
-	"packed-refs": {},
-	"config":      {},
-}
-
-type watched struct {
+// fsEntry holds per-repository state for the fsnotify watcher.
+type fsEntry struct {
 	repo   *git.Repository
 	gitDir string
 	timer  *time.Timer
@@ -38,8 +23,8 @@ type watched struct {
 type fsWatcher struct {
 	w       *fsnotify.Watcher
 	mu      sync.Mutex
-	byDir   map[string]*watched
-	byRepo  map[*git.Repository]*watched
+	byDir   map[string]*fsEntry
+	byRepo  map[*git.Repository]*fsEntry
 	closeCh chan struct{}
 	closed  bool
 }
@@ -51,8 +36,8 @@ func newFSWatcher() (*fsWatcher, error) {
 	}
 	fw := &fsWatcher{
 		w:       w,
-		byDir:   make(map[string]*watched),
-		byRepo:  make(map[*git.Repository]*watched),
+		byDir:   make(map[string]*fsEntry),
+		byRepo:  make(map[*git.Repository]*fsEntry),
 		closeCh: make(chan struct{}),
 	}
 	go fw.loop()
@@ -84,11 +69,11 @@ func (fw *fsWatcher) register(r *git.Repository) {
 	if fw.closed {
 		return
 	}
-	entry, ok := fw.byRepo[r]
-	if !ok {
-		entry = &watched{repo: r, gitDir: gitDir}
-		fw.byRepo[r] = entry
+	if _, ok := fw.byRepo[r]; ok {
+		return // already registered
 	}
+	entry := &fsEntry{repo: r, gitDir: gitDir}
+	fw.byRepo[r] = entry
 	for _, d := range dirs {
 		if _, already := fw.byDir[d]; already {
 			continue
@@ -152,10 +137,10 @@ func (fw *fsWatcher) handle(ev fsnotify.Event) {
 		return
 	}
 
-	// Top-level .git/ events: filter to the basenames we care about. Subdir
-	// events (refs/heads, refs/remotes/*) accept any change.
+	// Top-level .git/ events: only react to the basenames we care about.
+	// Subdir events (refs/heads/*, refs/remotes/*) accept any change.
 	if dir == entry.gitDir {
-		if _, want := gitFiles[base]; !want {
+		if _, want := trackedGitFilesSet[base]; !want {
 			return
 		}
 	} else if ev.Op&fsnotify.Create != 0 {
@@ -175,7 +160,7 @@ func (fw *fsWatcher) handle(ev fsnotify.Event) {
 	fw.scheduleRefresh(entry)
 }
 
-func (fw *fsWatcher) addDir(dir string, entry *watched) {
+func (fw *fsWatcher) addDir(dir string, entry *fsEntry) {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	if fw.closed {
@@ -190,7 +175,7 @@ func (fw *fsWatcher) addDir(dir string, entry *watched) {
 	fw.byDir[dir] = entry
 }
 
-func (fw *fsWatcher) scheduleRefresh(entry *watched) {
+func (fw *fsWatcher) scheduleRefresh(entry *fsEntry) {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	if fw.closed {
@@ -203,8 +188,9 @@ func (fw *fsWatcher) scheduleRefresh(entry *watched) {
 	entry.timer = time.AfterFunc(fsnotifyDebounce, func() {
 		fw.mu.Lock()
 		entry.timer = nil
+		closed := fw.closed
 		fw.mu.Unlock()
-		if entry.repo.WatchRefreshSuppressed() {
+		if closed || entry.repo.WatchRefreshSuppressed() {
 			return
 		}
 		command.RequestExternalRefresh(entry.repo)

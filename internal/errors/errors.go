@@ -1,7 +1,7 @@
 package errors
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 )
 
@@ -201,8 +201,8 @@ func ParseGitError(out string, err error) error {
 	}
 
 	if trimmed == "" {
-		return fmt.Errorf("unknown error")
+		return errors.New("unknown error")
 	}
 
-	return fmt.Errorf("%s", trimmed)
+	return errors.New(trimmed)
 }

@@ -3,7 +3,6 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 
 	"github.com/spf13/viper"
@@ -16,8 +15,16 @@ var (
 	configType     = "yaml"
 	appName        = "gitbatch"
 
-	configurationDirectory = filepath.Join(osConfigDirectory(runtime.GOOS), appName)
-	configFileAbsPath      = filepath.Join(configurationDirectory, configFileName)
+	configurationDirectory = func() string {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			// HOME is not set (common in some container environments); fall back to
+			// a writable temp directory so config creation doesn't fail.
+			base = os.TempDir()
+		}
+		return filepath.Join(base, appName)
+	}()
+	configFileAbsPath = filepath.Join(configurationDirectory, configFileName)
 )
 
 // configuration items
@@ -130,8 +137,11 @@ func validateConfig(config *Config) error {
 		config.Depth = recursionKeyDefault
 	}
 
-	// Validate mode
-	if config.Mode != "fetch" && config.Mode != "pull" {
+	// Validate mode — must be one of the supported operation modes.
+	switch config.Mode {
+	case "fetch", "pull", "merge", "rebase", "push":
+		// valid
+	default:
 		config.Mode = modeKeyDefault
 	}
 
@@ -197,15 +207,3 @@ func initializeConfigurationManager() error {
 	return nil
 }
 
-// returns OS dependent config directory
-func osConfigDirectory(osName string) (osConfigDirectory string) {
-	switch osName {
-	case "windows":
-		osConfigDirectory = os.Getenv("APPDATA")
-	case "darwin":
-		osConfigDirectory = os.Getenv("HOME") + "/Library/Application Support"
-	case "linux":
-		osConfigDirectory = os.Getenv("HOME") + "/.config"
-	}
-	return osConfigDirectory
-}

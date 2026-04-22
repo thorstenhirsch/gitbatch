@@ -1,6 +1,7 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](/LICENSE) [![Go Report Card](https://goreportcard.com/badge/github.com/thorstenhirsch/gitbatch)](https://goreportcard.com/report/github.com/thorstenhirsch/gitbatch)
 
 ## gitbatch
+
 Managing multiple git repositories is easier than ever. I (*was*) often end up working on many directories and manually pulling updates etc. To make this routine faster, I created a simple tool to handle this job. Although the focus is batch jobs, you can still do de facto micro management of your git repositories (e.g *add/reset, stash, commit etc.*). And for the more complex stuff, you can always open lazygit from within gitbatch.
 
 Note: This is my AI playing field, so expect weird code.
@@ -30,9 +31,59 @@ Windows:
 3. Add its directory to your `PATH`.
 
 ## Use
-run the `gitbatch` command from the parent of your git repositories. For start-up options simply `gitbatch --help`
 
-For more information see the [wiki pages](https://github.com/thorstenhirsch/gitbatch/wiki)
+Run `gitbatch` from the parent directory of your git repositories. The TUI starts in **pull** mode.
+
+```bash
+gitbatch                          # scan current directory
+gitbatch -d ~/src                 # scan a specific directory
+gitbatch -d ~/src -r 2            # scan recursively (depth 2)
+gitbatch -q                       # quick mode: batch pull without TUI
+gitbatch -q -m merge              # quick mode: batch merge
+gitbatch -m push                  # start TUI in push mode
+gitbatch --help                   # show all options
+```
+
+### Key bindings
+
+| Key | Action |
+|-----|--------|
+| `↑`/`k`, `↓`/`j` | Navigate repositories |
+| `g`/`Home`, `G`/`End` | Jump to top / bottom |
+| `PgUp`/`Ctrl+B`, `PgDn`/`Ctrl+F` | Page up / down |
+| `Ctrl+U`, `Ctrl+D` | Half-page up / down |
+| `←`/`h`, `→`/`l` | Scroll commit message |
+| `Space` | Toggle queue (tag/untag for batch) |
+| `Enter` | Start queued jobs |
+| `a` / `A` | Tag all / untag all |
+| `m` | Cycle operation mode (pull → merge → rebase → push) |
+| `Tab` | Open lazygit for selected repo |
+| `f` | Fetch selected repo |
+| `p` | Pull selected repo |
+| `P` | Push selected repo |
+| `c` | Commit (or clear error message) |
+| `S` | Stash local changes |
+| `O` / `D` | Pop / drop stash |
+| `b` | Show branches panel |
+| `B` | Expand/collapse all branches in table |
+| `r` | Show remotes panel |
+| `s` | Show status panel |
+| `R` | Force refresh all repositories |
+| `n` / `t` | Sort by name / last modified time |
+| `?` | Toggle help |
+| `q` / `Ctrl+C` | Quit |
+
+Inside the **branches** and **remotes** panels: `Space`/`c` to checkout, `d` to delete.
+
+### Configuration
+
+Configuration is stored at `$XDG_CONFIG_HOME/gitbatch/config.yml` (macOS: `~/Library/Application Support/gitbatch/config.yml`).
+
+```yaml
+mode: pull          # default mode: fetch | pull | merge | rebase | push
+recursion: 1        # directory scan depth
+quick: false        # start in quick mode by default
+```
 
 ## Credits
 - [go-git](https://github.com/go-git/go-git) for git interface (partially)
@@ -40,4 +91,3 @@ For more information see the [wiki pages](https://github.com/thorstenhirsch/gitb
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) for terminal styling
 - [viper](https://github.com/spf13/viper) for configuration management
 - [kingpin](https://github.com/alecthomas/kingpin) for command-line flag&options
-

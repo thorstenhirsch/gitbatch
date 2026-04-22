@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -40,25 +41,26 @@ func operate(directory, mode string) error {
 		return err
 	}
 	executor := command.NewExecutor(r)
+	ctx := context.Background()
 	switch mode {
 	case "fetch":
-		return executor.RunFetch(nil, &command.FetchOptions{
+		return executor.RunFetch(ctx, &command.FetchOptions{
 			Progress: true,
 		})
 	case "pull":
-		return executor.RunPull(nil, &command.PullOptions{
+		return executor.RunPull(ctx, &command.PullOptions{
 			Progress: true,
 			FFOnly:   true,
 		}, false)
 	case "merge":
-		return executor.RunMerge(nil, nil)
+		return executor.RunMerge(ctx, nil)
 	case "rebase":
-		return executor.RunRebase(nil, &command.PullOptions{
+		return executor.RunRebase(ctx, &command.PullOptions{
 			Progress: true,
 			Rebase:   true,
 		})
 	case "push":
-		return executor.RunPush(nil, nil, false)
+		return executor.RunPush(ctx, nil, false)
 	}
 	return fmt.Errorf("unsupported mode: %s", mode)
 }

@@ -59,7 +59,7 @@ type RepositoryListener func(event *RepositoryEvent) error
 // It is passed to listeners when Publish() is called
 type RepositoryEvent struct {
 	Name    string
-	Data    interface{}
+	Data    any
 	Context context.Context
 }
 
@@ -219,12 +219,11 @@ func InitializeRepo(dir string) (r *Repository, err error) {
 		return nil, err
 	}
 	// need nothing extra but loading additional components
-	return r, r.loadComponents(true)
+	return r, r.loadComponents()
 }
 
-// loadComponents initializes the fields of a repository such as branches,
-// remotes, commits etc. If reset, reload commit, remote pointers too
-func (r *Repository) loadComponents(reset bool) error {
+// loadComponents initializes branches, remotes, and stashed items for a repository.
+func (r *Repository) loadComponents() error {
 	// initRemotes must complete before initBranches: branch upstream lookup
 	// reads r.Remotes, so running them concurrently causes a race where
 	// initBranches finds r.Remotes empty and sets Upstream = nil.
@@ -257,7 +256,7 @@ func (r *Repository) Refresh() error {
 		r.ModTime = fstat.ModTime()
 	}
 
-	if err := r.loadComponents(false); err != nil {
+	if err := r.loadComponents(); err != nil {
 		return err
 	}
 
@@ -317,7 +316,7 @@ func (r *Repository) On(event string, listener RepositoryListener) {
 
 // Publish publishes the data to a certain event by its name.
 // Events are either queued for async dispatch or handled synchronously.
-func (r *Repository) Publish(eventName string, data interface{}) error {
+func (r *Repository) Publish(eventName string, data any) error {
 	if r == nil {
 		return fmt.Errorf("repository not initialized")
 	}
@@ -556,7 +555,9 @@ func (r *Repository) RefreshModTime() time.Time {
 	checkPath("HEAD")
 	checkPath("index")
 	checkPath("FETCH_HEAD")
-	checkPath("refs/heads/" + r.State.Branch.Name)
+	if r.State != nil && r.State.Branch != nil {
+		checkPath("refs/heads/" + r.State.Branch.Name)
+	}
 
 	r.ModTime = latest
 	return latest

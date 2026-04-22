@@ -135,8 +135,9 @@ func RunWithContextTimeout(ctx context.Context, d string, c string, args []strin
 func enrichGitEnv(base []string) []string {
 	env := make([]string, len(base))
 	copy(env, base)
-	// We don't disable terminal prompts anymore, because we want to detect them
-	// and return a proper error.
+	// Disable interactive terminal prompts so git fails fast instead of blocking.
+	// Credential prompts from SSH (which ignores GIT_TERMINAL_PROMPT) are caught
+	// by the scanningWriter above, which kills the process and returns ErrCredentialPromptDetected.
 	env = ensureEnv(env, "GIT_TERMINAL_PROMPT", "0")
 	env = ensureEnv(env, "GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=5 -o ConnectionAttempts=1")
 	env = ensureEnv(env, "GIT_HTTP_LOW_SPEED_LIMIT", "1")

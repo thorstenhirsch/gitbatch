@@ -82,26 +82,6 @@ func (m *Model) branchCommitContent(r *git.Repository, branch *git.Branch) strin
 	return msg
 }
 
-// invalidateDisplayCache drops cached entries for repositories that no longer
-// exist. Called rarely; keeps the map from growing unbounded across long
-// sessions if repositories get removed (not currently possible but future-proof).
-func (m *Model) invalidateDisplayCache() {
-	if m.displayCache == nil {
-		return
-	}
-	alive := make(map[string]struct{}, len(m.repositories))
-	for _, r := range m.repositories {
-		if r != nil {
-			alive[r.RepoID] = struct{}{}
-		}
-	}
-	for id := range m.displayCache {
-		if _, ok := alive[id]; !ok {
-			delete(m.displayCache, id)
-		}
-	}
-}
-
 // computeCommitContent is the slow path — walks go-git refs/tags to find tags
 // pointing at HEAD and reads the commit object when branch.State.Commit is
 // not populated. Called on cache miss only.

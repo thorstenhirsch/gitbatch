@@ -22,16 +22,25 @@ func TestInitializeConfigurationManager(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestOsConfigDirectory(t *testing.T) {
-	var tests = []struct {
-		input    string
-		expected string
-	}{
-		{"linux", ".config"},
-		{"darwin", "Application Support"},
+func TestConfigurationDirectory(t *testing.T) {
+	require.NotEmpty(t, configurationDirectory)
+	require.Contains(t, configurationDirectory, appName)
+}
+
+func TestValidateConfigMode(t *testing.T) {
+	validModes := []string{"fetch", "pull", "merge", "rebase", "push"}
+	for _, mode := range validModes {
+		cfg := &Config{Mode: mode, Depth: 1}
+		err := validateConfig(cfg)
+		require.NoError(t, err)
+		require.Equal(t, mode, cfg.Mode, "valid mode %q should be preserved", mode)
 	}
-	for _, test := range tests {
-		output := osConfigDirectory(test.input)
-		require.Contains(t, output, test.expected)
+
+	invalidModes := []string{"", "unknown", "git", "sync"}
+	for _, mode := range invalidModes {
+		cfg := &Config{Mode: mode, Depth: 1}
+		err := validateConfig(cfg)
+		require.NoError(t, err)
+		require.Equal(t, modeKeyDefault, cfg.Mode, "invalid mode %q should fall back to default", mode)
 	}
 }
