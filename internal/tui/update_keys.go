@@ -18,6 +18,20 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.branchPromptActive {
+		handled, cmd := m.handleBranchPromptKey(msg)
+		if handled {
+			return m, cmd
+		}
+	}
+
+	if m.worktreePromptActive {
+		handled, cmd := m.handleWorktreePromptKey(msg)
+		if handled {
+			return m, cmd
+		}
+	}
+
 	if m.stashPromptActive {
 		handled, cmd := m.handleStashPromptKey(msg)
 		if handled {
@@ -66,27 +80,24 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "tab":
-		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
-			r := m.repositories[m.cursor]
-			if isLazygitAvailable() {
-				var savedState git.RepositoryState
-				if r.State != nil {
-					savedState = *r.State
-				}
-				r.SetWorkStatus(git.Working)
-				r.RefreshModTime()
-				originalModTime := r.ModTime
-				cmd := tea.ExecProcess(exec.Command("lazygit", "-p", r.AbsPath), func(err error) tea.Msg {
-					if err != nil {
-						return errMsg{err: err}
-					}
-					return lazygitClosedMsg{repo: r, originalModTime: originalModTime, originalState: savedState}
-				})
-				if m.updateJobsRunningFlag() {
-					return m, tea.Batch(cmd, m.ensureTicking())
-				}
-				return m, cmd
+		if r := m.currentRepository(); r != nil && isLazygitAvailable() {
+			var savedState git.RepositoryState
+			if r.State != nil {
+				savedState = *r.State
 			}
+			r.SetWorkStatus(git.Working)
+			r.RefreshModTime()
+			originalModTime := r.ModTime
+			cmd := tea.ExecProcess(exec.Command("lazygit", "-p", r.AbsPath), func(err error) tea.Msg {
+				if err != nil {
+					return errMsg{err: err}
+				}
+				return lazygitClosedMsg{repo: r, originalModTime: originalModTime, originalState: savedState}
+			})
+			if m.updateJobsRunningFlag() {
+				return m, tea.Batch(cmd, m.ensureTicking())
+			}
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -100,25 +111,23 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if len(m.repositories) == 0 {
+		if m.overviewRowCount() == 0 {
 			return m, nil
 		}
-		m.cursor = (m.cursor - 1 + len(m.repositories)) % len(m.repositories)
-		m.cursor = m.findNextReadyIndex(m.cursor)
+		m.moveOverviewCursor(-1)
 		m.resetCommitScrollForSelected()
 		return m, nil
 
 	case "down", "j":
-		if len(m.repositories) == 0 {
+		if m.overviewRowCount() == 0 {
 			return m, nil
 		}
-		m.cursor = (m.cursor + 1) % len(m.repositories)
-		m.cursor = m.findNextReadyIndex(m.cursor)
+		m.moveOverviewCursor(1)
 		m.resetCommitScrollForSelected()
 		return m, nil
 
 	case "g":
-		m.cursor = 0
+		m.cursor = m.firstSelectableIndex()
 		m.resetCommitScrollForSelected()
 
 	case "G":
@@ -126,7 +135,7 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetCommitScrollForSelected()
 
 	case "home":
-		m.cursor = 0
+		m.cursor = m.firstSelectableIndex()
 		m.resetCommitScrollForSelected()
 
 	case "end":
@@ -134,39 +143,39 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resetCommitScrollForSelected()
 
 	case "ctrl+f", "pgdown":
-		pageSize := m.height - 5
-		m.cursor += pageSize
-		if m.cursor >= len(m.repositories) {
-			m.cursor = len(m.repositories) - 1
+		count := m.overviewRowCount()
+		if count == 0 {
+			return m, nil
 		}
-		m.cursor = m.findNextReadyIndex(m.cursor)
+		pageSize := m.height - 5
+		m.cursor = m.closestSelectableIndex(clampIndex(m.cursor+pageSize, count), 1)
 		m.resetCommitScrollForSelected()
 
 	case "ctrl+b", "pgup":
-		pageSize := m.height - 5
-		m.cursor -= pageSize
-		if m.cursor < 0 {
-			m.cursor = 0
+		count := m.overviewRowCount()
+		if count == 0 {
+			return m, nil
 		}
-		m.cursor = m.findNextReadyIndex(m.cursor)
+		pageSize := m.height - 5
+		m.cursor = m.closestSelectableIndex(clampIndex(m.cursor-pageSize, count), -1)
 		m.resetCommitScrollForSelected()
 
 	case "ctrl+d":
-		halfPage := (m.height - 5) / 2
-		m.cursor += halfPage
-		if m.cursor >= len(m.repositories) {
-			m.cursor = len(m.repositories) - 1
+		count := m.overviewRowCount()
+		if count == 0 {
+			return m, nil
 		}
-		m.cursor = m.findNextReadyIndex(m.cursor)
+		halfPage := (m.height - 5) / 2
+		m.cursor = m.closestSelectableIndex(clampIndex(m.cursor+halfPage, count), 1)
 		m.resetCommitScrollForSelected()
 
 	case "ctrl+u":
-		halfPage := (m.height - 5) / 2
-		m.cursor -= halfPage
-		if m.cursor < 0 {
-			m.cursor = 0
+		count := m.overviewRowCount()
+		if count == 0 {
+			return m, nil
 		}
-		m.cursor = m.findNextReadyIndex(m.cursor)
+		halfPage := (m.height - 5) / 2
+		m.cursor = m.closestSelectableIndex(clampIndex(m.cursor-halfPage, count), -1)
 		m.resetCommitScrollForSelected()
 
 	case "right", "l":
@@ -223,6 +232,9 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "m":
 		m.cycleMode()
 
+	case "W":
+		m.toggleWorktreeMode()
+
 	case "b":
 		m.activatePanel(BranchPanel)
 
@@ -234,15 +246,17 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.err = nil
 			return m, nil
 		}
-		if len(m.repositories) > 0 && m.cursor < len(m.repositories) {
-			repo := m.repositories[m.cursor]
-			if repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail {
-				repo.State.Message = ""
-				return m, nil
-			}
+		if repo := m.currentRepository(); repo != nil && repo.State != nil && repo.WorkStatus() == git.Fail {
+			repo.State.Message = ""
+			return m, nil
 		}
 		m.openCommitPrompt()
 		return m, nil
+
+	case "d":
+		if m.worktreeMode {
+			return m, m.deleteSelectedWorktreeCmd()
+		}
 
 	case "r":
 		m.activatePanel(RemotePanel)
@@ -269,6 +283,10 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
+		if m.worktreeMode {
+			m.openWorktreePrompt()
+			return m, nil
+		}
 		m.sortByName()
 
 	case "t":
@@ -298,6 +316,10 @@ func (m *Model) handleFocusKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) cycleMode() {
+	repo := m.currentRepository()
+	if repo != nil && repo.IsLinkedWorktree() {
+		return
+	}
 	for i, mode := range modes {
 		if mode.ID == m.mode.ID {
 			m.mode = modes[(i+1)%len(modes)]
@@ -347,4 +369,3 @@ func (m *Model) notifyMultiSelectionRestriction(message string) {
 		}
 	}
 }
-

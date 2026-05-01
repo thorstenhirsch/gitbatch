@@ -83,6 +83,11 @@ func (m *Model) ensureSelectionWithinBounds(panel SidePanelType) {
 }
 
 func (m *Model) handleBranchPanelKey(key string) (tea.Model, tea.Cmd) {
+	if key == "n" {
+		m.openBranchPrompt()
+		return m, nil
+	}
+
 	items := m.branchPanelItems()
 	count := len(items)
 	if count == 0 {
@@ -192,7 +197,6 @@ func (m *Model) handleRemotePanelKey(key string) (tea.Model, tea.Cmd) {
 	m.ensureRemoteCursorVisible(count, viewport)
 	return m, cmd
 }
-
 
 // --- Git operation commands ---
 
@@ -385,4 +389,3 @@ func (m *Model) deleteRemoteBranchMultiCmd(repos []*git.Repository, entry remote
 		return repoActionResultMsg{panel: RemotePanel}
 	}
 }
-

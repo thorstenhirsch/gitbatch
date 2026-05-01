@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,15 @@ const (
 
 var commonPanelBorderColor = lipgloss.AdaptiveColor{Light: "#FB8C00", Dark: "#FFB74D"}
 
+var (
+	worktreeDiffAdditionStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.AdaptiveColor{Light: "#2E7D32", Dark: "#66BB6A"})
+	worktreeDiffDeletionStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.AdaptiveColor{Light: "#C62828", Dark: "#EF5350"})
+	worktreeDiffInsertionsRE = regexp.MustCompile(`(\d+)\s+insertions?\(\+\)`)
+	worktreeDiffDeletionsRE  = regexp.MustCompile(`(\d+)\s+deletions?\(-\)`)
+)
+
 const (
 	maxRepoDisplayWidth   = 40
 	maxBranchDisplayWidth = 40
@@ -54,7 +64,6 @@ func (m *Model) getColumnWidths() columnWidths {
 	}
 	return m.cachedColWidths
 }
-
 
 func (m *Model) popupDimensions() (popupWidth, maxContentLines int) {
 	popupWidth = m.width * 70 / 100
@@ -165,6 +174,22 @@ func branchContent(r *git.Repository) string {
 		return ""
 	}
 	return r.State.Branch.Name + syncSuffix(r.State.Branch)
+}
+
+func renderRepoColumnBody(left string, width int, right string, rightWidth int) string {
+	if width <= 0 {
+		return ""
+	}
+	if right == "" || rightWidth <= 0 || width <= rightWidth+1 {
+		return fmt.Sprintf("%-*s", width, truncateString(left, width))
+	}
+
+	left = truncateString(left, width-rightWidth-1)
+	padding := width - lipgloss.Width(left) - rightWidth
+	if padding < 1 {
+		padding = 1
+	}
+	return left + strings.Repeat(" ", padding) + right
 }
 
 func syncSuffix(branch *git.Branch) string {
@@ -318,7 +343,7 @@ func (m *Model) renderLoadingScreen() string {
 	// Progress bar
 	barWidth := 30
 	if m.width > 60 {
-		barWidth = m.width/3
+		barWidth = m.width / 3
 		if barWidth > 40 {
 			barWidth = 40
 		}
@@ -448,6 +473,22 @@ func (m *Model) View() string {
 		}
 	}
 
+	if m.branchPromptActive {
+		if prompt := m.renderBranchPrompt(); prompt != "" {
+			content = lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, prompt,
+				lipgloss.WithWhitespaceChars(" "),
+			)
+		}
+	}
+
+	if m.worktreePromptActive {
+		if prompt := m.renderWorktreePrompt(); prompt != "" {
+			content = lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, prompt,
+				lipgloss.WithWhitespaceChars(" "),
+			)
+		}
+	}
+
 	if m.stashPromptActive {
 		if prompt := m.renderStashPrompt(); prompt != "" {
 			content = lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, prompt,
@@ -483,6 +524,9 @@ func (m *Model) renderOverviewTitleBar() string {
 		return ""
 	}
 	leftTitle := fmt.Sprintf(" Repositories (%d)", len(m.repositories))
+	if m.worktreeMode {
+		leftTitle = fmt.Sprintf(" Worktree mode (%d)", len(m.worktreeFamilies()))
+	}
 	rightTitle := fmt.Sprintf("Gitbatch %s ", m.version)
 	contentWidth := m.width - 2 // title style adds one space padding on each side
 	if contentWidth < 1 {
@@ -517,6 +561,9 @@ func (m *Model) renderOverview() string {
 			return m.styles.List.Render("Loading repositories...")
 		}
 		return m.styles.List.Render("No repositories found")
+	}
+	if m.worktreeMode {
+		return m.renderWorktreeOverview()
 	}
 
 	// Calculate visible range based on terminal height
@@ -635,6 +682,67 @@ func (m *Model) renderOverview() string {
 	return lipgloss.JoinVertical(lipgloss.Left, title, topBorder, list, bottomBorder)
 }
 
+func (m *Model) renderWorktreeOverview() string {
+	rows := m.overviewRows()
+	if len(rows) == 0 {
+		return m.styles.List.Render("No repositories found")
+	}
+
+	visibleHeight := m.height - 4
+	colWidths := m.getColumnWidths()
+	title := m.renderOverviewTitleBar()
+
+	topRow := 0
+	if len(rows) > visibleHeight && m.cursor < len(rows) {
+		topRow = m.cursor - visibleHeight/2
+		if topRow < 0 {
+			topRow = 0
+		}
+		if topRow+visibleHeight > len(rows) {
+			topRow = len(rows) - visibleHeight
+			if topRow < 0 {
+				topRow = 0
+			}
+		}
+	}
+	bottomRow := topRow + visibleHeight
+	if bottomRow > len(rows) {
+		bottomRow = len(rows)
+	}
+
+	var topLabel, bottomLabel string
+	if topRow > 0 {
+		topLabel = "↑ more above"
+	}
+	if bottomRow < len(rows) {
+		bottomLabel = "↓ more below"
+	}
+
+	topBorder := m.renderTableBorder(colWidths, "top", topLabel)
+	lines := make([]string, 0, visibleHeight)
+	for i := topRow; i < bottomRow && len(lines) < visibleHeight; i++ {
+		row := rows[i]
+		selected := i == m.cursor && row.selectable()
+		switch row.kind {
+		case overviewWorktreeRow:
+			lines = append(lines, m.renderWorktreeLine(row, selected, colWidths))
+		default:
+			lines = append(lines, m.renderWorktreeRepositoryLine(row, selected, colWidths))
+		}
+	}
+
+	for len(lines) < visibleHeight {
+		border := m.styles.TableBorder.Render("│")
+		emptyRepoCol := strings.Repeat(" ", colWidths.repo)
+		emptyBranchCol := strings.Repeat(" ", colWidths.branch)
+		emptyCommitCol := strings.Repeat(" ", colWidths.commitMsg)
+		lines = append(lines, border+emptyRepoCol+border+emptyBranchCol+border+emptyCommitCol+border)
+	}
+
+	bottomBorder := m.renderTableBorder(colWidths, "bottom", bottomLabel)
+	return lipgloss.JoinVertical(lipgloss.Left, title, topBorder, strings.Join(lines, "\n"), bottomBorder)
+}
+
 // applyUnselectedColumnStyle applies the appropriate lipgloss style to a column string
 // when the row is not selected. Selected rows are handled by the highlight block instead.
 func (m *Model) applyUnselectedColumnStyle(col string, selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream bool) string {
@@ -653,62 +761,99 @@ func (m *Model) applyUnselectedColumnStyle(col string, selected, requiresCredent
 	return col
 }
 
+type repoVisualState struct {
+	statusIcon          string
+	style               lipgloss.Style
+	linkedWorktree      bool
+	dirty               bool
+	failed              bool
+	requiresCredentials bool
+	hasLocalChanges     bool
+	noUpstream          bool
+}
+
+func (m *Model) repoVisualStateFor(r *git.Repository) repoVisualState {
+	state := repoVisualState{
+		statusIcon: " ",
+		style:      m.styles.ListItem,
+	}
+	if r == nil {
+		return state
+	}
+
+	status := r.WorkStatus()
+	state.linkedWorktree = r.IsLinkedWorktree()
+	state.dirty = repoIsDirty(r)
+	state.hasLocalChanges = repoHasLocalChanges(r)
+	state.failed = status == git.Fail
+	state.requiresCredentials = state.failed && r.State != nil && r.State.RequiresCredentials
+	state.noUpstream = state.failed && r.State != nil && r.State.NoUpstream
+
+	switch status {
+	case git.Pending:
+		state.statusIcon = waitingSymbol
+		state.style = m.styles.PendingItem
+	case git.Queued:
+		state.statusIcon = queuedSymbol
+		state.style = m.styles.QueuedItem
+	case git.Working:
+		if len(spinnerFrames) > 0 {
+			state.statusIcon = spinnerFrames[m.spinnerIndex%len(spinnerFrames)]
+		} else {
+			state.statusIcon = "*"
+		}
+		state.style = m.styles.WorkingItem
+	case git.Success:
+		state.statusIcon = successSymbol
+		state.style = m.styles.SuccessItem
+	case git.Fail:
+		if state.noUpstream {
+			if state.dirty {
+				state.statusIcon = localChangesSymbol
+			}
+			state.style = m.styles.DisabledItem
+		} else if state.requiresCredentials {
+			state.style = m.styles.CredentialsItem
+		} else {
+			state.statusIcon = failSymbol
+			state.style = m.styles.FailedItem
+		}
+	}
+	if state.hasLocalChanges && !state.dirty && !state.failed && status.Ready {
+		state.statusIcon = localChangesSymbol
+		state.style = m.styles.LocalChangesItem
+	}
+	if state.dirty && !state.failed && status.Ready {
+		state.statusIcon = dirtySymbol
+		state.style = m.styles.DisabledItem
+	}
+	return state
+}
+
+func (m *Model) selectedHighlightForVisual(visual repoVisualState) lipgloss.Style {
+	switch {
+	case visual.noUpstream:
+		return m.styles.DisabledSelectedItem
+	case visual.requiresCredentials:
+		return m.styles.CredentialsSelectedItem
+	case visual.failed:
+		return m.styles.FailedSelectedItem
+	case visual.dirty:
+		return m.styles.DisabledSelectedItem
+	case visual.hasLocalChanges:
+		return m.styles.LocalChangesSelectedItem
+	case visual.linkedWorktree:
+		return m.styles.WorktreeSelectedItem
+	default:
+		return m.styles.SelectedItem
+	}
+}
+
 // renderRepositoryLine renders a single repository line as a table row
 // Table format: │cursor status repo-name    │ branch-name │ commit tags/message │
 // Example:      │→ ●   example-repo         │  main       │ [v1.0.0] add feature │
 func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths columnWidths) string {
-	statusIcon := " "
-	style := m.styles.ListItem
-	status := r.WorkStatus()
-	dirty := repoIsDirty(r)
-	hasLocalChanges := repoHasLocalChanges(r)
-	failed := status == git.Fail
-	requiresCredentials := failed && r.State != nil && r.State.RequiresCredentials
-	noUpstream := failed && r.State != nil && r.State.NoUpstream
-
-	switch status {
-	case git.Pending:
-		statusIcon = waitingSymbol
-		style = m.styles.PendingItem
-	case git.Queued:
-		statusIcon = queuedSymbol
-		style = m.styles.QueuedItem
-	case git.Working:
-		if len(spinnerFrames) > 0 {
-			statusIcon = spinnerFrames[m.spinnerIndex%len(spinnerFrames)]
-		} else {
-			statusIcon = "*"
-		}
-		style = m.styles.WorkingItem
-	case git.Success:
-		statusIcon = successSymbol
-		style = m.styles.SuccessItem
-	case git.Fail:
-		if noUpstream {
-			if dirty {
-				statusIcon = localChangesSymbol
-			} else {
-				statusIcon = " "
-			}
-			style = m.styles.DisabledItem
-		} else if requiresCredentials {
-			statusIcon = " "
-			style = m.styles.CredentialsItem
-		} else {
-			statusIcon = failSymbol
-			style = m.styles.FailedItem
-		}
-	}
-	// Only show local-state symbols when state evaluation is complete (status.Ready).
-	// During evaluation (Working), keep showing the spinner.
-	if hasLocalChanges && !dirty && !failed && status.Ready {
-		statusIcon = localChangesSymbol
-		style = m.styles.LocalChangesItem
-	}
-	if dirty && !failed && status.Ready {
-		statusIcon = dirtySymbol
-		style = m.styles.DisabledItem
-	}
+	visual := m.repoVisualStateFor(r)
 
 	cursor := " "
 	if selected {
@@ -721,8 +866,8 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 	repoName := truncateString(repoDisplayName(r), repoNameWidth)
 	repoColumn := m.applyUnselectedColumnStyle(
-		fmt.Sprintf("%s %s %-*s", cursor, statusIcon, repoNameWidth, repoName),
-		selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream,
+		fmt.Sprintf("%s %s %-*s", cursor, visual.statusIcon, repoNameWidth, repoName),
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
 	)
 
 	branchContentWidth := colWidths.branch - 1
@@ -732,7 +877,7 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	branchContent := truncateString(branchContent(r), branchContentWidth)
 	branchColumn := m.applyUnselectedColumnStyle(
 		fmt.Sprintf("%-*s", colWidths.branch, " "+branchContent),
-		selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream,
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
 	)
 
 	commitContentWidth := colWidths.commitMsg - 1
@@ -753,33 +898,154 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	commitContent := visibleCommitContent(fullCommitContent, offset, commitContentWidth)
 	commitColumn := m.applyUnselectedColumnStyle(
 		fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent),
-		selected, requiresCredentials, hasLocalChanges, dirty, failed, noUpstream,
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
 	)
 
 	var styledRepoCol, styledBranchCol, styledCommitCol string
 	if selected {
-		var highlight lipgloss.Style
-		switch {
-		case noUpstream:
-			highlight = m.styles.DisabledSelectedItem
-		case requiresCredentials:
-			highlight = m.styles.CredentialsSelectedItem
-		case failed:
-			highlight = m.styles.FailedSelectedItem
-		case dirty:
-			highlight = m.styles.DisabledSelectedItem
-		case hasLocalChanges:
-			highlight = m.styles.LocalChangesSelectedItem
-		default:
-			highlight = m.styles.SelectedItem
-		}
+		highlight := m.selectedHighlightForVisual(visual)
 		styledRepoCol = highlight.Render(repoColumn)
 		styledBranchCol = highlight.Render(branchColumn)
 		styledCommitCol = highlight.Render(commitColumn)
 	} else {
-		styledRepoCol = style.Render(repoColumn)
-		styledBranchCol = style.Render(branchColumn)
-		styledCommitCol = style.Render(commitColumn)
+		styledRepoCol = visual.style.Render(repoColumn)
+		styledBranchCol = visual.style.Render(branchColumn)
+		styledCommitCol = visual.style.Render(commitColumn)
+	}
+
+	border := m.styles.TableBorder.Render("│")
+	return border + styledRepoCol + border + styledBranchCol + border + styledCommitCol + border
+}
+
+func (m *Model) renderWorktreeRepositoryLine(row overviewRow, selected bool, colWidths columnWidths) string {
+	repo := row.repository()
+	visual := m.repoVisualStateFor(repo)
+
+	cursor := " "
+	if selected {
+		cursor = "→"
+	}
+
+	repoNameWidth := colWidths.repo - repoColPrefixWidth
+	if repoNameWidth < 0 {
+		repoNameWidth = 0
+	}
+	repoBody := renderRepoColumnBody(repoDisplayName(repo), repoNameWidth, "", 0)
+	repoColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%s %s %s", cursor, visual.statusIcon, repoBody),
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+	)
+
+	branchWidth := colWidths.branch - 1
+	if branchWidth < 0 {
+		branchWidth = 0
+	}
+	branchColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%-*s", colWidths.branch, " "+truncateString(row.worktreeLabel(), branchWidth)),
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+	)
+
+	commitWidth := colWidths.commitMsg - 1
+	if commitWidth < 0 {
+		commitWidth = 0
+	}
+	fullCommitContent := m.commitContentForRepo(repo)
+	offset := m.getCommitScrollOffset(repo)
+	maxOffset := maxCommitOffset(fullCommitContent, commitWidth)
+	if offset > maxOffset {
+		offset = maxOffset
+		m.setCommitScrollOffset(repo, offset)
+	} else if maxOffset == 0 && offset != 0 {
+		offset = 0
+		m.setCommitScrollOffset(repo, 0)
+	}
+	commitContent := visibleCommitContent(fullCommitContent, offset, commitWidth)
+	commitColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent),
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+	)
+
+	var styledRepoCol, styledBranchCol, styledCommitCol string
+	if selected {
+		highlight := m.selectedHighlightForVisual(visual)
+		styledRepoCol = highlight.Render(repoColumn)
+		styledBranchCol = highlight.Render(branchColumn)
+		styledCommitCol = highlight.Render(commitColumn)
+	} else {
+		styledRepoCol = visual.style.Render(repoColumn)
+		styledBranchCol = visual.style.Render(branchColumn)
+		styledCommitCol = visual.style.Render(commitColumn)
+	}
+
+	border := m.styles.TableBorder.Render("│")
+	return border + styledRepoCol + border + styledBranchCol + border + styledCommitCol + border
+}
+
+func (m *Model) renderWorktreeLine(row overviewRow, selected bool, colWidths columnWidths) string {
+	repo := row.repository()
+	visual := m.repoVisualStateFor(repo)
+
+	cursor := " "
+	if selected {
+		cursor = "→"
+	}
+
+	repoNameWidth := colWidths.repo - repoColPrefixWidth
+	if repoNameWidth < 0 {
+		repoNameWidth = 0
+	}
+	repoName := ""
+	diffContent := ""
+	diffWidth := 0
+	if row.worktree != nil && row.worktree.IsPrimary {
+		repoName = repoDisplayName(row.actionRepository())
+		diffContent, diffWidth = m.worktreeDiffContent(row.actionRepository(), selected)
+	}
+	repoColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%s %s %s", cursor, visual.statusIcon, renderRepoColumnBody(repoName, repoNameWidth, diffContent, diffWidth)),
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+	)
+
+	worktreeWidth := colWidths.branch - 1
+	if worktreeWidth < 0 {
+		worktreeWidth = 0
+	}
+	worktreeLabel := truncateString(m.worktreeBranchContent(row), worktreeWidth)
+	branchColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%-*s", colWidths.branch, " "+worktreeLabel),
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+	)
+
+	commitWidth := colWidths.commitMsg - 1
+	if commitWidth < 0 {
+		commitWidth = 0
+	}
+	commitContent := ""
+	if repo != nil {
+		fullCommitContent := m.commitContentForRepo(repo)
+		offset := m.getCommitScrollOffset(repo)
+		maxOffset := maxCommitOffset(fullCommitContent, commitWidth)
+		if offset > maxOffset {
+			offset = maxOffset
+			m.setCommitScrollOffset(repo, offset)
+		}
+		commitContent = visibleCommitContent(fullCommitContent, offset, commitWidth)
+	}
+	commitColumn := m.applyUnselectedColumnStyle(
+		fmt.Sprintf("%-*s", colWidths.commitMsg, " "+commitContent),
+		selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+	)
+
+	var styledRepoCol, styledBranchCol, styledCommitCol string
+	if selected {
+		highlight := m.selectedHighlightForVisual(visual)
+		styledRepoCol = highlight.Render(repoColumn)
+		styledBranchCol = highlight.Render(branchColumn)
+		styledCommitCol = highlight.Render(commitColumn)
+	} else {
+		styledRepoCol = visual.style.Render(repoColumn)
+		styledBranchCol = visual.style.Render(branchColumn)
+		styledCommitCol = visual.style.Render(commitColumn)
 	}
 
 	border := m.styles.TableBorder.Render("│")
@@ -1054,7 +1320,10 @@ func (m *Model) renderPanelPopup() string {
 		contentWidth = 1
 	}
 
-	r := m.repositories[m.cursor]
+	r := m.currentRepository()
+	if r == nil {
+		return ""
+	}
 
 	// Build header with repo info
 	var header []string
@@ -1191,8 +1460,9 @@ func (m *Model) renderBranches(contentWidth, maxLines int) string {
 	}
 
 	lines := make([]string, 0, maxLines)
-	instructions := fmt.Sprintf("%s checkout  %s delete",
+	instructions := fmt.Sprintf("%s checkout  %s new  %s delete",
 		m.styles.KeyBinding.Render("[space/c]"),
+		m.styles.KeyBinding.Render("[n]"),
 		m.styles.KeyBinding.Render("[d]"),
 	)
 	lines = append(lines, padToWidth(instructions, contentWidth))
@@ -1642,6 +1912,7 @@ func (m *Model) renderStatusBar() string {
 	}
 
 	focusRepo := m.currentRepository()
+	linkedWorktree := focusRepo != nil && focusRepo.IsLinkedWorktree()
 	dirty := repoIsDirty(focusRepo)
 	hasLocalChanges := repoHasLocalChanges(focusRepo) && !dirty
 	failed := focusRepo != nil && focusRepo.WorkStatus() == git.Fail
@@ -1655,10 +1926,35 @@ func (m *Model) renderStatusBar() string {
 	leftWidth := lipgloss.Width(left)
 	rightWidth := lipgloss.Width(right)
 
-	if center == "" {
+	if linkedWorktree {
+		worktreeName := ""
+		if row, ok := m.currentOverviewRow(); ok {
+			switch {
+			case row.worktree != nil:
+				worktreeName = row.worktreeLabel()
+			case row.repo != nil:
+				if current := row.repo.CurrentWorktree(); current != nil {
+					worktreeName = trimWorktreeRepositoryPrefix(current.DisplayName(), row.repo)
+				}
+			}
+		}
+		if worktreeName == "" {
+			worktreeName = "unknown"
+		}
+		statusBarStyle = m.styles.StatusBarWorktree
+		left = " "
+		center = "worktree: " + worktreeName
+	} else if center == "" {
 		tagHint := "space: tag"
 		if focusRepo != nil && focusRepo.WorkStatus() == git.Queued {
 			tagHint = "space: untag"
+		}
+		worktreeHint := []string(nil)
+		if m.worktreeMode {
+			worktreeHint = append(worktreeHint, "W branches", "n worktree")
+			if row, ok := m.currentOverviewRow(); ok && row.kind == overviewWorktreeRow && row.worktree != nil && !row.worktree.IsPrimary {
+				worktreeHint = append(worktreeHint, "d delete")
+			}
 		}
 		if queuedCount > 0 {
 			tagHint += " | enter: run"
@@ -1669,6 +1965,7 @@ func (m *Model) renderStatusBar() string {
 			if m.hasStashTargets() {
 				parts = append(parts, "O pop", "D drop")
 			}
+			parts = append(parts, worktreeHint...)
 			parts = append(parts, tagHint)
 			center = strings.Join(parts, " | ")
 		} else if m.activeForcePrompt == nil && m.activeCredentialPrompt == nil {
@@ -1679,12 +1976,16 @@ func (m *Model) renderStatusBar() string {
 			if m.hasStashTargets() {
 				parts = append(parts, "O pop", "D drop")
 			}
+			parts = append(parts, worktreeHint...)
 			parts = append(parts, tagHint)
 			center = strings.Join(parts, " | ")
 		}
 	}
 
-	if failed {
+	if linkedWorktree {
+		// Keep linked worktrees in their dedicated neutral state even when local
+		// file changes are present; remote actions are intentionally disabled.
+	} else if failed {
 		hasMessage := focusRepo != nil && focusRepo.State != nil && focusRepo.State.Message != ""
 		message := "Operation failed"
 		if hasMessage {
@@ -1805,9 +2106,12 @@ Actions:     Space   toggle queue        Enter   start queue
              m       cycle mode          Tab     open lazygit
 
 Views:       b  branches    r  remotes    B  expand branches
-             s  status      R  force refresh   ESC back
+             W  toggle worktrees    s  status    R  force refresh
+             ESC back
 
 Sorting:     n  by name     t  by time
+Branch view: n  create branch
+Worktrees:   n  create worktree    d  delete selected worktree
 
 Git:         f  fetch repo   p  pull repo   P  push repo
              c  commit / clear error        S  stash
@@ -1898,6 +2202,90 @@ func (m *Model) renderCommitPrompt() string {
 
 	content := strings.Join(lines, "\n")
 	return m.styles.Panel.Width(panelWidth).Render(content)
+}
+
+func (m *Model) renderBranchPrompt() string {
+	if !m.branchPromptActive {
+		return ""
+	}
+
+	panelWidth := 60
+	if m.width > 0 && m.width-4 < panelWidth {
+		panelWidth = m.width - 4
+	}
+	if panelWidth < 30 {
+		panelWidth = 30
+	}
+	contentWidth := panelWidth - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	repoCount := len(m.branchPromptRepos)
+	title := fmt.Sprintf("Create branch in %d repos", repoCount)
+	if repoCount == 1 && m.branchPromptRepos[0] != nil {
+		title = fmt.Sprintf("Create branch in %s", truncateString(m.branchPromptRepos[0].Name, contentWidth-17))
+	}
+
+	branchDisplay := m.branchNameBuffer
+	if len(branchDisplay) > contentWidth-2 {
+		branchDisplay = branchDisplay[len(branchDisplay)-contentWidth+2:]
+	}
+
+	lines := []string{
+		m.styles.PanelTitle.Render(title),
+		"",
+		fmt.Sprintf("> Branch: %s", branchDisplay),
+		"",
+		"enter: create | esc: cancel",
+	}
+
+	return m.styles.Panel.Width(panelWidth).Render(strings.Join(lines, "\n"))
+}
+
+func (m *Model) renderWorktreePrompt() string {
+	if !m.worktreePromptActive || m.worktreePromptRepo == nil {
+		return ""
+	}
+
+	panelWidth := 60
+	if m.width > 0 && m.width-4 < panelWidth {
+		panelWidth = m.width - 4
+	}
+	if panelWidth < 30 {
+		panelWidth = 30
+	}
+	contentWidth := panelWidth - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	branchIndicator := " "
+	pathIndicator := " "
+	if m.worktreePromptField == worktreeFieldBranch {
+		branchIndicator = ">"
+	} else {
+		pathIndicator = ">"
+	}
+
+	branchDisplay := m.worktreeBranchBuffer
+	if len(branchDisplay) > contentWidth-2 {
+		branchDisplay = branchDisplay[len(branchDisplay)-contentWidth+2:]
+	}
+	pathDisplay := m.worktreePathBuffer
+	if len(pathDisplay) > contentWidth-2 {
+		pathDisplay = pathDisplay[len(pathDisplay)-contentWidth+2:]
+	}
+
+	lines := []string{
+		m.styles.PanelTitle.Render(fmt.Sprintf("Create worktree in %s", truncateString(m.worktreePromptRepo.Name, contentWidth-20))),
+		"",
+		fmt.Sprintf("%s Branch: %s", branchIndicator, branchDisplay),
+		fmt.Sprintf("%s Path:   %s", pathIndicator, pathDisplay),
+		"",
+		"enter: next/create | tab: switch field | esc: cancel",
+	}
+	return m.styles.Panel.Width(panelWidth).Render(strings.Join(lines, "\n"))
 }
 
 func splitDescLines(s string, maxWidth int) []string {

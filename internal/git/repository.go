@@ -19,15 +19,18 @@ import (
 // actually the name of its folder in the host's filesystem. It holds the go-git
 // repository entity along with critic entities such as remote/branches and commits
 type Repository struct {
-	RepoID   string
-	Name     string
-	AbsPath  string
-	ModTime  time.Time
-	Repo     git.Repository
-	Branches []*Branch
-	Remotes  []*Remote
-	Stasheds []*StashedItem
-	State    *RepositoryState
+	RepoID       string
+	Name         string
+	AbsPath      string
+	ModTime      time.Time
+	GitDir       string
+	CommonGitDir string
+	Repo         git.Repository
+	Branches     []*Branch
+	Remotes      []*Remote
+	Stasheds     []*StashedItem
+	Worktrees    []*Worktree
+	State        *RepositoryState
 
 	mutex     sync.RWMutex
 	listeners map[string][]RepositoryListener
@@ -191,7 +194,9 @@ func FastInitializeRepo(dir string) (r *Repository, err error) {
 	defer f.Close()
 	// get status of the file
 	fstat, _ := f.Stat()
-	rp, err := git.PlainOpen(dir)
+	rp, err := git.PlainOpenWithOptions(dir, &git.PlainOpenOptions{
+		EnableDotGitCommonDir: true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +238,7 @@ func (r *Repository) loadComponents() error {
 	var eg errgroup.Group
 	eg.Go(r.initBranches)
 	eg.Go(r.loadStashedItems)
+	eg.Go(r.loadWorktrees)
 	return eg.Wait()
 }
 
@@ -246,7 +252,9 @@ func (r *Repository) Refresh() error {
 	}
 
 	// re-initialize the go-git repository struct
-	rp, err := git.PlainOpen(r.AbsPath)
+	rp, err := git.PlainOpenWithOptions(r.AbsPath, &git.PlainOpenOptions{
+		EnableDotGitCommonDir: true,
+	})
 	if err != nil {
 		return err
 	}
@@ -543,20 +551,28 @@ func (r *Repository) String() string {
 // It returns the latest modification time found.
 func (r *Repository) RefreshModTime() time.Time {
 	latest := r.ModTime
+	gitDir := r.GitDir
+	if gitDir == "" {
+		gitDir = filepath.Join(r.AbsPath, ".git")
+	}
+	commonGitDir := r.CommonGitDir
+	if commonGitDir == "" {
+		commonGitDir = gitDir
+	}
 
-	checkPath := func(path string) {
-		info, err := os.Stat(filepath.Join(r.AbsPath, ".git", path))
+	checkPath := func(root, path string) {
+		info, err := os.Stat(filepath.Join(root, path))
 		if err == nil && info.ModTime().After(latest) {
 			latest = info.ModTime()
 		}
 	}
 
 	// Check critical git files that indicate state changes
-	checkPath("HEAD")
-	checkPath("index")
-	checkPath("FETCH_HEAD")
+	checkPath(gitDir, "HEAD")
+	checkPath(gitDir, "index")
+	checkPath(commonGitDir, "FETCH_HEAD")
 	if r.State != nil && r.State.Branch != nil {
-		checkPath("refs/heads/" + r.State.Branch.Name)
+		checkPath(commonGitDir, "refs/heads/"+r.State.Branch.Name)
 	}
 
 	r.ModTime = latest

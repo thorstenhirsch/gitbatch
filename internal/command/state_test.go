@@ -126,6 +126,28 @@ func TestApplySuccessState(t *testing.T) {
 	}
 }
 
+func TestHandleStateProbe_LinkedWorktreeSkipsNoUpstreamState(t *testing.T) {
+	basePath := initLocalWorktreeRepoForStateTest(t)
+	linkedPath := filepath.Join(filepath.Dir(basePath), "feature-worktree")
+	_, err := Run(basePath, "git", []string{"worktree", "add", "-b", "feature/worktree", linkedPath})
+	require.NoError(t, err)
+
+	repo, err := git.InitializeRepo(linkedPath)
+	require.NoError(t, err)
+	require.True(t, repo.IsLinkedWorktree())
+	require.NotNil(t, repo.State)
+	require.NotNil(t, repo.State.Branch)
+	require.Nil(t, repo.State.Branch.Upstream)
+
+	handleStateProbe(repo)
+	time.Sleep(150 * time.Millisecond)
+
+	require.False(t, repo.State.NoUpstream)
+	require.False(t, repo.State.RequiresCredentials)
+	require.Equal(t, git.Available, repo.WorkStatus())
+	require.True(t, repo.State.Branch.Clean)
+}
+
 // TestSetAndTrackStatus tests the setAndTrackStatus helper.
 func TestSetAndTrackStatus(t *testing.T) {
 	repo := &git.Repository{
@@ -140,6 +162,36 @@ func TestSetAndTrackStatus(t *testing.T) {
 
 	changed = setAndTrackStatus(repo, git.Available)
 	require.False(t, changed, "status unchanged when already Available")
+}
+
+func initLocalWorktreeRepoForStateTest(t *testing.T) string {
+	t.Helper()
+
+	tempRoot := t.TempDir()
+	basePath := filepath.Join(tempRoot, "repo")
+	remotePath := filepath.Join(tempRoot, "remote.git")
+	require.NoError(t, os.MkdirAll(basePath, 0o755))
+	require.NoError(t, os.MkdirAll(remotePath, 0o755))
+
+	_, err := Run(basePath, "git", []string{"init", "--initial-branch=main"})
+	require.NoError(t, err)
+	_, err = Run(remotePath, "git", []string{"init", "--bare"})
+	require.NoError(t, err)
+	_, err = Run(basePath, "git", []string{"config", "user.email", "test@example.com"})
+	require.NoError(t, err)
+	_, err = Run(basePath, "git", []string{"config", "user.name", "Test User"})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(basePath, "README.md"), []byte("hello"), 0o644))
+	_, err = Run(basePath, "git", []string{"add", "README.md"})
+	require.NoError(t, err)
+	_, err = Run(basePath, "git", []string{"commit", "-m", "initial commit"})
+	require.NoError(t, err)
+	_, err = Run(basePath, "git", []string{"remote", "add", "origin", remotePath})
+	require.NoError(t, err)
+	_, err = Run(basePath, "git", []string{"push", "-u", "origin", "main"})
+	require.NoError(t, err)
+
+	return basePath
 }
 
 // TestApplyCleanliness_CleanWorkingTree_NoIncomingCommits tests the scenario where

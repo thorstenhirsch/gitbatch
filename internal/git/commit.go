@@ -3,6 +3,7 @@ package git
 import (
 	"io"
 	"regexp"
+	"sort"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -179,3 +180,33 @@ func (c *Commit) String() string {
 	return d
 }
 
+// LatestCommitAheadOfPrimary returns the newest commit that exists on the
+// linked worktree branch but not on the family's primary worktree.
+func (r *Repository) LatestCommitAheadOfPrimary() (*object.Commit, int, error) {
+	if r == nil || !r.IsLinkedWorktree() {
+		return nil, 0, nil
+	}
+
+	primary := r.PrimaryWorktree()
+	current := r.CurrentWorktree()
+	if primary == nil || current == nil {
+		return nil, 0, nil
+	}
+	if primary.Head == "" || current.Head == "" || primary.Head == current.Head {
+		return nil, 0, nil
+	}
+
+	commits, err := RevList(r, RevListOptions{
+		Ref1: primary.Head,
+		Ref2: current.Head,
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(commits) == 0 {
+		return nil, 0, nil
+	}
+
+	sort.Sort(CommitTime(commits))
+	return commits[0], len(commits), nil
+}

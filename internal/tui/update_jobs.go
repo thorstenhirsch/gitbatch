@@ -13,10 +13,7 @@ import (
 
 // toggleQueue adds or removes the selected repository from the queue.
 func (m *Model) toggleQueue() tea.Cmd {
-	if len(m.repositories) == 0 {
-		return nil
-	}
-	r := m.repositories[m.cursor]
+	r := m.currentRepository()
 	if r == nil {
 		return nil
 	}
@@ -134,6 +131,9 @@ func (m *Model) startQueue() tea.Cmd {
 		m.preBatchRefresh()
 		for _, r := range m.repositories {
 			if r.WorkStatus() != git.Queued {
+				continue
+			}
+			if !repoIsActionable(r) {
 				continue
 			}
 			j := &job.Job{Repository: r}

@@ -241,6 +241,11 @@ func stateChanged(prev stateSnapshot, r *git.Repository) bool {
 func handleStateProbe(r *git.Repository) {
 	setRepositoryStatus(r, git.Pending, "waiting")
 
+	if r.IsLinkedWorktree() {
+		handleLinkedWorktreeStateProbe(r)
+		return
+	}
+
 	branch := r.State.Branch
 	if branch == nil {
 		r.MarkCriticalError("branch not set")
@@ -265,6 +270,10 @@ func handleStateProbe(r *git.Repository) {
 		r.MarkCriticalError(fmt.Sprintf("unable to schedule verification: %v", err))
 		return
 	}
+}
+
+func handleLinkedWorktreeStateProbe(r *git.Repository) {
+	go applyLinkedWorktreeStateAsync(r)
 }
 
 // scheduleUpstreamVerificationAndFetch asynchronously verifies the upstream exists and then fetches.
@@ -504,6 +513,36 @@ func applyCleanlinessAsync(r *git.Repository) {
 	if hasConflicts {
 		r.MarkDisabled()
 	} else if !workingTreeClean {
+		r.MarkLocalChanges()
+	} else {
+		r.MarkClean()
+	}
+	if r.WorkStatus() != git.Available {
+		r.SetWorkStatus(git.Available)
+	}
+}
+
+func applyLinkedWorktreeStateAsync(r *git.Repository) {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return
+	}
+
+	r.BeginWatchSuppress()
+	defer r.EndWatchSuppress()
+
+	if err := git.AcquireGitSemaphore(context.Background()); err != nil {
+		return
+	}
+	defer git.ReleaseGitSemaphore()
+
+	status, err := r.GetWorkTreeStatus()
+	if err != nil {
+		return
+	}
+
+	if status.HasConflicts {
+		r.MarkDisabled()
+	} else if !status.Clean {
 		r.MarkLocalChanges()
 	} else {
 		r.MarkClean()

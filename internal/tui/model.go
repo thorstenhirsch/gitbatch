@@ -33,6 +33,7 @@ type Model struct {
 
 	// View state
 	expandBranches         bool
+	worktreeMode           bool
 	sidePanel              SidePanelType
 	showHelp               bool
 	branchCursor           int
@@ -53,6 +54,14 @@ type Model struct {
 	commitPromptField      commitField
 	commitMessageBuffer    string
 	commitDescBuffer       string
+	branchPromptActive     bool
+	branchPromptRepos      []*git.Repository
+	branchNameBuffer       string
+	worktreePromptActive   bool
+	worktreePromptRepo     *git.Repository
+	worktreePromptField    worktreeField
+	worktreeBranchBuffer   string
+	worktreePathBuffer     string
 	stashPromptActive      bool
 	stashPromptRepos       []*git.Repository
 	stashMessageBuffer     string
@@ -129,8 +138,15 @@ const (
 type commitField int
 
 const (
-	commitFieldMessage     commitField = iota
+	commitFieldMessage commitField = iota
 	commitFieldDescription
+)
+
+type worktreeField int
+
+const (
+	worktreeFieldBranch worktreeField = iota
+	worktreeFieldPath
 )
 
 type stashActionType int
@@ -172,22 +188,24 @@ var tagHighlightColor = lipgloss.AdaptiveColor{Light: "#1565C0", Dark: "#42A5F5"
 
 // Styles holds all lipgloss styles for the UI
 type Styles struct {
-	Title                   lipgloss.Style
-	StatusBarPull           lipgloss.Style
-	StatusBarMerge          lipgloss.Style
-	StatusBarCredentials    lipgloss.Style
-	StatusBarRebase         lipgloss.Style
-	StatusBarPush           lipgloss.Style
-	StatusBarDisabled       lipgloss.Style
-	StatusBarLocalChanges   lipgloss.Style
-	StatusBarError          lipgloss.Style
-	Help                    lipgloss.Style
-	List                    lipgloss.Style
-	ListItem                lipgloss.Style
+	Title                    lipgloss.Style
+	StatusBarPull            lipgloss.Style
+	StatusBarMerge           lipgloss.Style
+	StatusBarCredentials     lipgloss.Style
+	StatusBarRebase          lipgloss.Style
+	StatusBarPush            lipgloss.Style
+	StatusBarWorktree        lipgloss.Style
+	StatusBarDisabled        lipgloss.Style
+	StatusBarLocalChanges    lipgloss.Style
+	StatusBarError           lipgloss.Style
+	Help                     lipgloss.Style
+	List                     lipgloss.Style
+	ListItem                 lipgloss.Style
 	CredentialsSelectedItem  lipgloss.Style
 	SelectedItem             lipgloss.Style
 	DisabledSelectedItem     lipgloss.Style
 	LocalChangesSelectedItem lipgloss.Style
+	WorktreeSelectedItem     lipgloss.Style
 	CommonSelectedItem       lipgloss.Style
 	FailedSelectedItem       lipgloss.Style
 	CredentialsItem          lipgloss.Style
@@ -198,12 +216,12 @@ type Styles struct {
 	FailedItem               lipgloss.Style
 	DisabledItem             lipgloss.Style
 	LocalChangesItem         lipgloss.Style
-	BranchInfo              lipgloss.Style
-	KeyBinding              lipgloss.Style
-	Panel                   lipgloss.Style
-	PanelTitle              lipgloss.Style
-	Error                   lipgloss.Style
-	TableBorder             lipgloss.Style
+	BranchInfo               lipgloss.Style
+	KeyBinding               lipgloss.Style
+	Panel                    lipgloss.Style
+	PanelTitle               lipgloss.Style
+	Error                    lipgloss.Style
+	TableBorder              lipgloss.Style
 }
 
 // DefaultStyles returns the default style set
@@ -241,6 +259,10 @@ func DefaultStyles() *Styles {
 		StatusBarPush: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
 			Background(lipgloss.AdaptiveColor{Light: "#FFF59D", Dark: "#FDD835"}).
+			Padding(0, 1),
+		StatusBarWorktree: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#263238", Dark: "#ECEFF1"}).
+			Background(lipgloss.AdaptiveColor{Light: "#CFD8DC", Dark: "#546E7A"}).
 			Padding(0, 1),
 		StatusBarCredentials: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
@@ -290,6 +312,10 @@ func DefaultStyles() *Styles {
 			Foreground(lipgloss.AdaptiveColor{Light: "#1B1B1B", Dark: "#1B1B1B"}).
 			Background(lipgloss.AdaptiveColor{Light: "#FFF176", Dark: "#F9A825"}).
 			Bold(true),
+		WorktreeSelectedItem: lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#263238", Dark: "#ECEFF1"}).
+			Background(lipgloss.AdaptiveColor{Light: "#CFD8DC", Dark: "#546E7A"}).
+			Bold(true),
 		BranchInfo: lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#00796B", Dark: "#4DB6AC"}),
 		KeyBinding: lipgloss.NewStyle().
@@ -321,16 +347,16 @@ func New(mode string, directories []string) *Model {
 	}
 
 	return &Model{
-		directories:        directories,
-		mode:               initialMode,
-		repositories:       make([]*git.Repository, 0),
-		sidePanel:          NonePanel,
-		styles:             DefaultStyles(),
-		loading:            true,
-		version:            Version,
+		directories:         directories,
+		mode:                initialMode,
+		repositories:        make([]*git.Repository, 0),
+		sidePanel:           NonePanel,
+		styles:              DefaultStyles(),
+		loading:             true,
+		version:             Version,
 		commitScrollOffsets: make(map[string]int),
-		repositoryUpdateCh: make(chan struct{}, 256),
-		displayCache:       make(map[string]*repoDisplayEntry),
+		repositoryUpdateCh:  make(chan struct{}, 256),
+		displayCache:        make(map[string]*repoDisplayEntry),
 	}
 }
 

@@ -95,8 +95,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				repo.SetWorkStatus(git.Pending)
 			}
 		}
-		if m.cursor >= len(m.repositories) {
-			m.cursor = len(m.repositories) - 1
+		if m.cursor >= m.overviewRowCount() {
+			m.cursor = m.findLastNavigableIndex()
+		} else {
 			m.cursor = m.findNextReadyIndex(m.cursor)
 		}
 		m.loading = false
@@ -110,6 +111,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Throttle O(n) job check to avoid starvation on large repo lists.
 		if m.shouldThrottleCheck(&m.lastJobCheck, 100*time.Millisecond) {
 			m.updateJobsRunningFlag()
+		}
+		if m.worktreeMode {
+			m.cursor = m.closestSelectableIndex(m.cursor, 1)
 		}
 		return m, tea.Batch(m.ensureTicking(), m.listenRepositoryUpdatesCmd())
 
@@ -240,10 +244,22 @@ func (m *Model) addRepository(r *git.Repository) {
 }
 
 func (m *Model) currentRepository() *git.Repository {
-	if len(m.repositories) == 0 || m.cursor < 0 || m.cursor >= len(m.repositories) {
+	row, ok := m.currentOverviewRow()
+	if !ok {
 		return nil
 	}
-	return m.repositories[m.cursor]
+	return row.repository()
+}
+
+func (m *Model) currentWorktreeCommandRepository() *git.Repository {
+	row, ok := m.currentOverviewRow()
+	if !ok {
+		return nil
+	}
+	if repo := row.actionRepository(); repo != nil {
+		return repo
+	}
+	return row.repository()
 }
 
 func (m *Model) updateJobsRunningFlag() bool {
@@ -265,22 +281,23 @@ func (m *Model) advanceSpinner() {
 }
 
 func (m *Model) findNextReadyIndex(start int) int {
-	count := len(m.repositories)
+	rows := m.overviewRows()
+	count := len(rows)
 	if count == 0 {
 		return 0
 	}
 	if start < 0 {
-		return count - 1
+		return m.lastSelectableIndex()
 	}
 	if start >= count {
-		return 0
+		return m.firstSelectableIndex()
 	}
-	return start
+	return m.closestSelectableIndex(start, 1)
 }
 
 func (m *Model) findLastNavigableIndex() int {
-	if count := len(m.repositories); count > 0 {
-		return count - 1
+	if m.overviewRowCount() > 0 {
+		return m.lastSelectableIndex()
 	}
 	return 0
 }
@@ -307,6 +324,9 @@ func repoHasLocalChanges(repo *git.Repository) bool {
 
 func repoIsActionable(repo *git.Repository) bool {
 	if repo == nil {
+		return false
+	}
+	if repo.IsLinkedWorktree() {
 		return false
 	}
 	status := repo.WorkStatus()
