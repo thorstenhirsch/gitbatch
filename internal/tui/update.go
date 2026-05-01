@@ -95,6 +95,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				repo.SetWorkStatus(git.Pending)
 			}
 		}
+		m.applyRepositorySort()
 		if m.cursor >= m.overviewRowCount() {
 			m.cursor = m.findLastNavigableIndex()
 		} else {
@@ -111,6 +112,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Throttle O(n) job check to avoid starvation on large repo lists.
 		if m.shouldThrottleCheck(&m.lastJobCheck, 100*time.Millisecond) {
 			m.updateJobsRunningFlag()
+		}
+		if m.sortMode == repositorySortByTime {
+			m.applyRepositorySort()
 		}
 		if m.worktreeMode {
 			m.cursor = m.closestSelectableIndex(m.cursor, 1)
@@ -216,8 +220,7 @@ func (m *Model) handleLazygitClosed(msg lazygitClosedMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// addRepository inserts r into m.repositories in alphabetical order and
-// registers its event listeners.
+// addRepository inserts r into m.repositories and registers its event listeners.
 func (m *Model) addRepository(r *git.Repository) {
 	rs := m.repositories
 	index := sort.Search(len(rs), func(i int) bool {
@@ -241,6 +244,9 @@ func (m *Model) addRepository(r *git.Repository) {
 	}
 
 	m.repositories = rs
+	if m.sortMode == repositorySortByTime {
+		m.applyRepositorySort()
+	}
 }
 
 func (m *Model) currentRepository() *git.Repository {

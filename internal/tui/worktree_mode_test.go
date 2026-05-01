@@ -191,11 +191,32 @@ func TestRenderStatusBar_LinkedWorktreeShowsNeutralWorktreeLabel(t *testing.T) {
 
 	statusBar := ansi.Strip(model.renderStatusBar())
 	require.Contains(t, statusBar, "worktree: feature")
+	require.Contains(t, statusBar, "n worktree")
+	require.Contains(t, statusBar, "d delete")
 	require.NotContains(t, statusBar, "space: tag")
 	require.NotContains(t, statusBar, "f fetch")
 	require.NotContains(t, statusBar, "p pull")
 	require.NotContains(t, statusBar, "P push")
 	require.NotContains(t, statusBar, "m: switch")
+}
+
+func TestRenderStatusBar_PrimaryWorktreeShowsNewWorktreeHintWithoutDelete(t *testing.T) {
+	primary := testRepoWithWorktree("app", "/repos/app", "/repos/app/.git", "main", true)
+	linked := testRepoWithWorktree("app-feature", "/worktrees/app-feature", "/repos/app/.git", "feature/demo", false)
+
+	model := Model{
+		repositories: []*git.Repository{primary, linked},
+		worktreeMode: true,
+		cursor:       0,
+		mode:         pullMode,
+		width:        100,
+		styles:       DefaultStyles(),
+	}
+
+	statusBar := ansi.Strip(model.renderStatusBar())
+	require.Contains(t, statusBar, "n worktree")
+	require.Contains(t, statusBar, "W branches")
+	require.NotContains(t, statusBar, "d delete")
 }
 
 func TestRepoIsActionable_LinkedWorktreeIsDisabled(t *testing.T) {

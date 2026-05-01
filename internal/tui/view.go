@@ -1870,6 +1870,13 @@ func (m *Model) hasCommitTargets() bool {
 	return false
 }
 
+func (m *Model) hasBranchTargets() bool {
+	if len(filterRepositories(m.taggedRepositories())) > 0 {
+		return true
+	}
+	return m.currentRepository() != nil
+}
+
 // hasStashTargets returns true if pressing 'O' or 'D' would find repos with stashes.
 func (m *Model) hasStashTargets() bool {
 	repos := m.taggedRepositories()
@@ -1883,6 +1890,18 @@ func (m *Model) hasStashTargets() bool {
 		}
 	}
 	return false
+}
+
+func (m *Model) worktreeStatusHints() []string {
+	if !m.worktreeMode {
+		return nil
+	}
+
+	hints := []string{"W branches", "n worktree"}
+	if row, ok := m.currentOverviewRow(); ok && row.kind == overviewWorktreeRow && row.worktree != nil && !row.worktree.IsPrimary {
+		hints = append(hints, "d delete")
+	}
+	return hints
 }
 
 // renderStatusBar renders the bottom status bar
@@ -1925,6 +1944,11 @@ func (m *Model) renderStatusBar() string {
 
 	leftWidth := lipgloss.Width(left)
 	rightWidth := lipgloss.Width(right)
+	worktreeHints := m.worktreeStatusHints()
+	branchHints := []string(nil)
+	if !m.worktreeMode && m.hasBranchTargets() {
+		branchHints = append(branchHints, "n branch")
+	}
 
 	if linkedWorktree {
 		worktreeName := ""
@@ -1943,40 +1967,36 @@ func (m *Model) renderStatusBar() string {
 		}
 		statusBarStyle = m.styles.StatusBarWorktree
 		left = " "
-		center = "worktree: " + worktreeName
+		parts := append([]string{"worktree: " + worktreeName}, worktreeHints...)
+		center = strings.Join(parts, " | ")
 	} else if center == "" {
 		tagHint := "space: tag"
 		if focusRepo != nil && focusRepo.WorkStatus() == git.Queued {
 			tagHint = "space: untag"
 		}
-		worktreeHint := []string(nil)
-		if m.worktreeMode {
-			worktreeHint = append(worktreeHint, "W branches", "n worktree")
-			if row, ok := m.currentOverviewRow(); ok && row.kind == overviewWorktreeRow && row.worktree != nil && !row.worktree.IsPrimary {
-				worktreeHint = append(worktreeHint, "d delete")
-			}
-		}
 		if queuedCount > 0 {
 			tagHint += " | enter: run"
 			parts := []string{fmt.Sprintf("tagged: %d", queuedCount)}
+			parts = append(parts, branchHints...)
 			if m.hasCommitTargets() {
 				parts = append(parts, "c commit", "S stash")
 			}
 			if m.hasStashTargets() {
 				parts = append(parts, "O pop", "D drop")
 			}
-			parts = append(parts, worktreeHint...)
+			parts = append(parts, worktreeHints...)
 			parts = append(parts, tagHint)
 			center = strings.Join(parts, " | ")
 		} else if m.activeForcePrompt == nil && m.activeCredentialPrompt == nil {
 			parts := []string{"f fetch", "p pull", "P push"}
+			parts = append(parts, branchHints...)
 			if m.hasCommitTargets() {
 				parts = append(parts, "c commit", "S stash")
 			}
 			if m.hasStashTargets() {
 				parts = append(parts, "O pop", "D drop")
 			}
-			parts = append(parts, worktreeHint...)
+			parts = append(parts, worktreeHints...)
 			parts = append(parts, tagHint)
 			center = strings.Join(parts, " | ")
 		}
@@ -2032,19 +2052,23 @@ func (m *Model) renderStatusBar() string {
 	} else if dirty {
 		statusBarStyle = m.styles.StatusBarDisabled
 		left = " repo disabled"
+		parts := []string{"working tree has conflicting changes"}
+		parts = append(parts, branchHints...)
 		if m.hasStashTargets() {
-			center = "O: pop stash | D: drop stash"
-		} else {
-			center = "working tree has conflicting changes"
+			parts = append(parts, "O: pop stash", "D: drop stash")
 		}
+		parts = append(parts, worktreeHints...)
+		center = strings.Join(parts, " | ")
 		right = "TAB: lazygit"
 	} else if hasLocalChanges {
 		statusBarStyle = m.styles.StatusBarLocalChanges
 		left = " ~ local changes"
 		parts := []string{"c: commit", "S: stash"}
+		parts = append(parts, branchHints...)
 		if m.hasStashTargets() {
 			parts = append(parts, "O: pop stash", "D: drop stash")
 		}
+		parts = append(parts, worktreeHints...)
 		center = strings.Join(parts, " | ")
 	} else if m.err != nil {
 		statusBarStyle = m.styles.StatusBarPush
@@ -2105,17 +2129,17 @@ Actions:     Space   toggle queue        Enter   start queue
              a       tag all             A       untag all
              m       cycle mode          Tab     open lazygit
 
-Views:       b  branches    r  remotes    B  expand branches
-             W  toggle worktrees    s  status    R  force refresh
+Views:       b  branches           s  status       r  remotes
+             B  expand branches    W  worktrees    R  refresh
              ESC back
 
-Sorting:     n  by name     t  by time
-Branch view: n  create branch
-Worktrees:   n  create worktree    d  delete selected worktree
+Sorting:     t  toggle name/time
 
 Git:         f  fetch repo   p  pull repo   P  push repo
+             n  new branch / worktree       d  delete worktree
              c  commit / clear error        S  stash
              O  pop stash    D  drop stash
+
 Other:       ?  help         q/Ctrl+C  quit
 `
 

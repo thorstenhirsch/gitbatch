@@ -287,10 +287,11 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openWorktreePrompt()
 			return m, nil
 		}
-		m.sortByName()
+		m.openBranchPrompt()
+		return m, nil
 
 	case "t":
-		m.sortByTime()
+		m.toggleRepositorySort()
 	}
 
 	return m, nil
@@ -329,11 +330,30 @@ func (m *Model) cycleMode() {
 }
 
 func (m *Model) sortByName() {
-	sort.Sort(git.Alphabetical(m.repositories))
+	m.sortMode = repositorySortByName
+	m.applyRepositorySort()
 }
 
 func (m *Model) sortByTime() {
-	sort.Sort(git.LastModified(m.repositories))
+	m.sortMode = repositorySortByTime
+	m.applyRepositorySort()
+}
+
+func (m *Model) toggleRepositorySort() {
+	if m.sortMode == repositorySortByTime {
+		m.sortByName()
+		return
+	}
+	m.sortByTime()
+}
+
+func (m *Model) applyRepositorySort() {
+	switch m.sortMode {
+	case repositorySortByTime:
+		sort.Sort(git.LastModified(m.repositories))
+	default:
+		sort.Sort(git.Alphabetical(m.repositories))
+	}
 }
 
 func (m *Model) clearSuccessFormatting() {

@@ -34,6 +34,7 @@ type Model struct {
 	// View state
 	expandBranches         bool
 	worktreeMode           bool
+	sortMode               repositorySortMode
 	sidePanel              SidePanelType
 	showHelp               bool
 	branchCursor           int
@@ -98,6 +99,13 @@ type columnWidths struct {
 	branch    int
 	commitMsg int
 }
+
+type repositorySortMode uint8
+
+const (
+	repositorySortByName repositorySortMode = iota
+	repositorySortByTime
+)
 
 // SidePanelType represents which side panel is active
 type SidePanelType int
