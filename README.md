@@ -57,10 +57,15 @@ gitbatch --help                   # show all options
 | `Enter` | Start queued jobs |
 | `a` / `A` | Tag all / untag all |
 | `m` | Cycle operation mode (pull → merge → rebase → push) |
+| `W` | Toggle worktree mode |
 | `Tab` | Open lazygit for selected repo |
 | `f` | Fetch selected repo |
 | `p` | Pull selected repo |
 | `P` | Push selected repo |
+| `n` | Create branch, or create worktree in worktree mode |
+| `d` | Delete selected linked worktree in worktree mode |
+| `L` | Lock/unlock selected linked worktree in worktree mode |
+| `X` | Prune stale worktrees in worktree mode |
 | `c` | Commit (or clear error message) |
 | `S` | Stash local changes |
 | `O` / `D` | Pop / drop stash |
@@ -69,11 +74,28 @@ gitbatch --help                   # show all options
 | `r` | Show remotes panel |
 | `s` | Show status panel |
 | `R` | Force refresh all repositories |
-| `n` / `t` | Sort by name / last modified time |
+| `t` | Toggle sorting by name / last modified time |
 | `?` | Toggle help |
 | `q` / `Ctrl+C` | Quit |
 
 Inside the **branches** and **remotes** panels: `Space`/`c` to checkout, `d` to delete.
+
+### Worktree mode
+
+Press `W` to switch the overview into **worktree mode**. Repositories that share a common Git directory are grouped into a single worktree family so you can inspect the main worktree and linked worktrees together.
+
+Available worktree actions:
+
+- `n` — create a new linked worktree by entering a branch name and path
+- `d` — remove the selected linked worktree
+- `L` — lock or unlock the selected linked worktree
+- `X` — prune stale worktree metadata
+
+When you type a branch name in the worktree prompt, `gitbatch` now prefills the path using the same default convention as `wt`: a sibling directory named `<repo>.<branch-sanitized>`, for example `myproject.feature-auth`.
+
+Worktree rows show `[main]` for the primary worktree, a shortened name for linked worktrees, and markers such as `[L]` for locked or `[P]` for prunable entries.
+
+The status panel (`s`) also reflects the selected worktree, including whether it is primary or linked and any lock/prune reasons reported by Git.
 
 ### Configuration
 

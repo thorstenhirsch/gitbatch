@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,16 +35,20 @@ func (m *Model) handleWorktreePromptKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	case " ":
 		if m.worktreePromptField == worktreeFieldBranch {
 			m.worktreeBranchBuffer += " "
+			m.syncWorktreePathPrefill()
 		} else {
 			m.worktreePathBuffer += " "
+			m.worktreePathEdited = true
 		}
 		return true, nil
 	default:
 		if len(msg.Runes) > 0 {
 			if m.worktreePromptField == worktreeFieldBranch {
 				m.worktreeBranchBuffer += string(msg.Runes)
+				m.syncWorktreePathPrefill()
 			} else {
 				m.worktreePathBuffer += string(msg.Runes)
+				m.worktreePathEdited = true
 			}
 		}
 		return true, nil
@@ -64,6 +69,8 @@ func (m *Model) openWorktreePrompt() {
 	m.worktreePromptField = worktreeFieldBranch
 	m.worktreeBranchBuffer = ""
 	m.worktreePathBuffer = ""
+	m.worktreePathEdited = false
+	m.syncWorktreePathPrefill()
 }
 
 func (m *Model) dismissWorktreePrompt() {
@@ -72,6 +79,7 @@ func (m *Model) dismissWorktreePrompt() {
 	m.worktreePromptField = worktreeFieldBranch
 	m.worktreeBranchBuffer = ""
 	m.worktreePathBuffer = ""
+	m.worktreePathEdited = false
 }
 
 func (m *Model) switchWorktreeField() {
@@ -88,12 +96,14 @@ func (m *Model) backspaceWorktreeInput() {
 		if len(runes) > 0 {
 			m.worktreeBranchBuffer = string(runes[:len(runes)-1])
 		}
+		m.syncWorktreePathPrefill()
 		return
 	}
 	runes := []rune(m.worktreePathBuffer)
 	if len(runes) > 0 {
 		m.worktreePathBuffer = string(runes[:len(runes)-1])
 	}
+	m.worktreePathEdited = true
 }
 
 func (m *Model) submitWorktreePrompt() tea.Cmd {
@@ -139,6 +149,41 @@ func (m *Model) createWorktreeCmd(repo *git.Repository, branchName, path string)
 	}
 }
 
+func (m *Model) syncWorktreePathPrefill() {
+	if m == nil || m.worktreePathEdited {
+		return
+	}
+	m.worktreePathBuffer = suggestedWorktreePath(m.worktreePromptRepo, m.worktreeBranchBuffer)
+}
+
+func suggestedWorktreePath(repo *git.Repository, branchName string) string {
+	if repo == nil {
+		return ""
+	}
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return ""
+	}
+	basePath := repo.AbsPath
+	if primary := repo.PrimaryWorktree(); primary != nil && strings.TrimSpace(primary.Path) != "" {
+		basePath = primary.Path
+	}
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" {
+		return ""
+	}
+	repoName := filepath.Base(basePath)
+	if repoName == "." || repoName == string(filepath.Separator) || repoName == "" {
+		return ""
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(basePath), repoName+"."+sanitizeWorktreeBranchName(branchName)))
+}
+
+func sanitizeWorktreeBranchName(branchName string) string {
+	replacer := strings.NewReplacer("/", "-", "\\", "-")
+	return replacer.Replace(strings.TrimSpace(branchName))
+}
+
 func (m *Model) deleteSelectedWorktreeCmd() tea.Cmd {
 	row, ok := m.currentOverviewRow()
 	if !ok || row.kind != overviewWorktreeRow || row.worktree == nil {
@@ -147,6 +192,10 @@ func (m *Model) deleteSelectedWorktreeCmd() tea.Cmd {
 	repo := row.actionRepository()
 	if repo == nil {
 		return nil
+	}
+	refreshRepo := row.repo
+	if refreshRepo == nil {
+		refreshRepo = repo
 	}
 	worktree := row.worktree
 	if worktree.IsPrimary {
@@ -162,8 +211,10 @@ func (m *Model) deleteSelectedWorktreeCmd() tea.Cmd {
 			return errMsg{err: fmt.Errorf("delete worktree %s: %w", worktree.DisplayName(), err)}
 		}
 		m.removeRepositoryByPath(worktree.Path)
-		repo.State.Message = fmt.Sprintf("deleted worktree %s", worktree.DisplayName())
-		if err := scheduleRefresh(repo); err != nil {
+		if refreshRepo.State != nil {
+			refreshRepo.State.Message = fmt.Sprintf("deleted worktree %s", worktree.DisplayName())
+		}
+		if err := scheduleRefresh(refreshRepo); err != nil {
 			return errMsg{err: err}
 		}
 		m.cursor = m.closestSelectableIndex(m.cursor, -1)

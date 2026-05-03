@@ -63,6 +63,7 @@ type Model struct {
 	worktreePromptField    worktreeField
 	worktreeBranchBuffer   string
 	worktreePathBuffer     string
+	worktreePathEdited     bool
 	stashPromptActive      bool
 	stashPromptRepos       []*git.Repository
 	stashMessageBuffer     string

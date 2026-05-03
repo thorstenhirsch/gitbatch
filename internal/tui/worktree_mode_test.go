@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync/atomic"
 	"strings"
 	"testing"
 
@@ -307,6 +308,86 @@ func TestDeleteSelectedWorktreeCmd_BlocksMainWorktree(t *testing.T) {
 	cmd := model.deleteSelectedWorktreeCmd()
 	require.Nil(t, cmd)
 	require.Equal(t, "cannot delete [main] worktree", primary.State.Message)
+}
+
+func TestDeleteSelectedWorktreeCmd_RefreshesPrimaryRepository(t *testing.T) {
+	basePath, linkedPath := initNamedLinkedWorktreeRepoForTUITest(t, "app", "app-feature", "feature/demo")
+
+	primary, err := git.InitializeRepo(basePath)
+	require.NoError(t, err)
+	linked, err := git.InitializeRepo(linkedPath)
+	require.NoError(t, err)
+
+	var primaryRefreshes atomic.Int32
+	var linkedRefreshes atomic.Int32
+	primary.On(git.RepositoryRefreshRequested, func(_ *git.RepositoryEvent) error {
+		primaryRefreshes.Add(1)
+		return nil
+	})
+	linked.On(git.RepositoryRefreshRequested, func(_ *git.RepositoryEvent) error {
+		linkedRefreshes.Add(1)
+		return nil
+	})
+
+	model := Model{
+		repositories: []*git.Repository{primary, linked},
+		worktreeMode: true,
+		cursor:       1,
+	}
+
+	cmd := model.deleteSelectedWorktreeCmd()
+	require.NotNil(t, cmd)
+	msg := cmd()
+	require.IsType(t, jobCompletedMsg{}, msg)
+
+	require.Equal(t, int32(1), primaryRefreshes.Load())
+	require.Equal(t, int32(0), linkedRefreshes.Load())
+}
+
+func TestSuggestedWorktreePath_UsesPrimaryRepoNamingConvention(t *testing.T) {
+	linked := testRepoWithWorktree("app-feature", "/worktrees/app-feature", "/repos/app/.git", "feature/demo", false)
+
+	path := suggestedWorktreePath(linked, "feature/auth")
+
+	require.Equal(t, "/repos/app.feature-auth", path)
+}
+
+func TestSyncWorktreePathPrefill_PreservesManualPathEdits(t *testing.T) {
+	repo := testRepoWithWorktree("app", "/repos/app", "/repos/app/.git", "main", true)
+	model := Model{
+		worktreePromptActive: true,
+		worktreePromptRepo:   repo,
+	}
+
+	model.worktreeBranchBuffer = "feature/demo"
+	model.syncWorktreePathPrefill()
+	require.Equal(t, "/repos/app.feature-demo", model.worktreePathBuffer)
+
+	model.worktreePathBuffer = "/tmp/custom-path"
+	model.worktreePathEdited = true
+	model.worktreeBranchBuffer = "feature/other"
+	model.syncWorktreePathPrefill()
+	require.Equal(t, "/tmp/custom-path", model.worktreePathBuffer)
+}
+
+func TestRenderStatus_LinkedWorktreeShowsWorktreeMetadata(t *testing.T) {
+	linked := testRepoWithWorktree("app-feature", "/worktrees/app-feature", "/repos/app/.git", "feature/demo", false)
+	linked.State.Branch.Clean = true
+	linked.Worktrees[1].IsLocked = true
+	linked.Worktrees[1].LockReason = "pinned for release"
+	linked.Worktrees[1].IsPrunable = true
+	linked.Worktrees[1].PrunableReason = "gitdir file points to missing path"
+
+	model := Model{styles: DefaultStyles()}
+	rendered := ansi.Strip(model.renderStatus(linked, 80, 24))
+
+	require.Contains(t, rendered, "On branch feature/demo")
+	require.Contains(t, rendered, "Worktree       feature/demo")
+	require.Contains(t, rendered, "Role           linked")
+	require.Contains(t, rendered, "Locked         yes")
+	require.Contains(t, rendered, "Lock reason    pinned for release")
+	require.Contains(t, rendered, "Prunable       yes")
+	require.Contains(t, rendered, "Prune reason   gitdir file points to missing path")
 }
 
 func TestOverviewRow_WorktreeLabelTrimsRepositoryPrefix(t *testing.T) {

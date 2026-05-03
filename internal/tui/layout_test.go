@@ -149,6 +149,29 @@ func TestRenderRepositoryLineAgeColumnHasLeftAndRightPadding(t *testing.T) {
 	assert.Equal(t, " 2d ", parts[4])
 }
 
+func TestRenderOverviewFillsEmptyRowsWithAgeColumnBorder(t *testing.T) {
+	repo := testRepoWithBranch("example", "main")
+	repo.State.Branch.State = &git.BranchState{
+		Commit: &git.Commit{
+			Commiter: &git.Contributor{When: time.Now().Add(-48 * time.Hour)},
+		},
+	}
+
+	model := Model{
+		repositories: []*git.Repository{repo},
+		width:        130,
+		height:       8,
+		styles:       DefaultStyles(),
+	}
+
+	lines := strings.Split(ansi.Strip(model.renderOverview()), "\n")
+	require.GreaterOrEqual(t, len(lines), 6)
+
+	parts := strings.Split(lines[3], "│")
+	require.Len(t, parts, 6)
+	assert.Equal(t, strings.Repeat(" ", 4), parts[4])
+}
+
 func testRepoWithBranch(name, branch string) *git.Repository {
 	repo := &git.Repository{
 		Name:  name,

@@ -335,6 +335,20 @@ func (m *Model) renderTableBorder(colWidths columnWidths, borderType string, lab
 	return m.styles.TableBorder.Render(border)
 }
 
+func (m *Model) renderEmptyTableRow(colWidths columnWidths) string {
+	border := m.styles.TableBorder.Render("│")
+	row := border +
+		strings.Repeat(" ", colWidths.repo) +
+		border +
+		strings.Repeat(" ", colWidths.branch) +
+		border +
+		strings.Repeat(" ", colWidths.commitMsg)
+	if colWidths.age > 0 {
+		row += border + strings.Repeat(" ", colWidths.age)
+	}
+	return row + border
+}
+
 func borderSegmentWithLeftLabel(width int, horiz, label string) string {
 	if width <= 0 {
 		return ""
@@ -758,12 +772,7 @@ func (m *Model) renderOverview() string {
 
 	// Fill remaining rows with empty table rows to stretch to full height
 	for len(lines) < visibleHeight {
-		border := m.styles.TableBorder.Render("│")
-		emptyRepoCol := strings.Repeat(" ", colWidths.repo)
-		emptyBranchCol := strings.Repeat(" ", colWidths.branch)
-		emptyCommitCol := strings.Repeat(" ", colWidths.commitMsg)
-		emptyRow := border + emptyRepoCol + border + emptyBranchCol + border + emptyCommitCol + border
-		lines = append(lines, emptyRow)
+		lines = append(lines, m.renderEmptyTableRow(colWidths))
 	}
 
 	// Bottom border for table
@@ -824,11 +833,7 @@ func (m *Model) renderWorktreeOverview() string {
 	}
 
 	for len(lines) < visibleHeight {
-		border := m.styles.TableBorder.Render("│")
-		emptyRepoCol := strings.Repeat(" ", colWidths.repo)
-		emptyBranchCol := strings.Repeat(" ", colWidths.branch)
-		emptyCommitCol := strings.Repeat(" ", colWidths.commitMsg)
-		lines = append(lines, border+emptyRepoCol+border+emptyBranchCol+border+emptyCommitCol+border)
+		lines = append(lines, m.renderEmptyTableRow(colWidths))
 	}
 
 	bottomBorder := m.renderTableBorder(colWidths, "bottom", bottomLabel)
@@ -1784,6 +1789,28 @@ func (m *Model) renderStatus(r *git.Repository, contentWidth, maxLines int) stri
 		addLine("Working tree is dirty (conflicts with incoming)")
 	}
 
+	if current := r.CurrentWorktree(); current != nil {
+		addSection()
+		addLine(fmt.Sprintf("Worktree       %s", statusWorktreeLabel(current)))
+		if current.IsPrimary {
+			addLine("Role           primary")
+		} else {
+			addLine("Role           linked")
+		}
+		if current.IsLocked {
+			addLine("Locked         yes")
+			if reason := strings.TrimSpace(current.LockReason); reason != "" {
+				addLine("Lock reason    " + reason)
+			}
+		}
+		if current.IsPrunable {
+			addLine("Prunable       yes")
+			if reason := strings.TrimSpace(current.PrunableReason); reason != "" {
+				addLine("Prune reason   " + reason)
+			}
+		}
+	}
+
 	// Fetch additional stats via git commands
 	stats := m.fetchRepoStats(r)
 
@@ -1817,6 +1844,29 @@ func (m *Model) renderStatus(r *git.Repository, contentWidth, maxLines int) stri
 	addLine(r.AbsPath)
 
 	return strings.Join(clampLines(lines, maxLines), "\n")
+}
+
+func statusWorktreeLabel(worktree *git.Worktree) string {
+	if worktree == nil {
+		return ""
+	}
+	if worktree.IsPrimary {
+		return "[main]"
+	}
+	if worktree.IsDetached {
+		head := strings.TrimSpace(worktree.Head)
+		if len(head) > 7 {
+			head = head[:7]
+		}
+		if head == "" {
+			head = "?"
+		}
+		return "(detached:" + head + ")"
+	}
+	if branch := strings.TrimSpace(worktree.BranchName); branch != "" {
+		return branch
+	}
+	return worktree.DisplayName()
 }
 
 type repoStats struct {
