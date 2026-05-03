@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -31,7 +32,7 @@ const (
 
 	repoColPrefixWidth = 4 // cursor + space + status + space
 
-	minTerminalWidth  = 60
+	minTerminalWidth  = 50
 	minTerminalHeight = 8
 )
 
@@ -49,15 +50,23 @@ var (
 const (
 	maxRepoDisplayWidth   = 40
 	maxBranchDisplayWidth = 40
+	repoColumnMinWidth    = 16
+	branchColumnMinWidth  = 1
 	commitColumnMinWidth  = 10
+	ageColumnThreshold    = 112
+	ageColumnPadding      = 2
 )
 
 const panelHorizontalFrame = 4
 
 // getColumnWidths returns cached column widths, recalculating only when necessary
 func (m *Model) getColumnWidths() columnWidths {
-	// Check if we need to recalculate
-	if m.cachedWidth != m.width || m.cachedRepoCount != len(m.repositories) {
+	needsRecalc := m.cachedWidth != m.width || m.cachedRepoCount != len(m.repositories)
+	// Age column starts at 0 while commits are still loading; re-check until it stabilises.
+	if !needsRecalc && m.width > ageColumnThreshold && m.cachedColWidths.age == 0 {
+		needsRecalc = maxAgeWidth(m.repositories) > 0
+	}
+	if needsRecalc {
 		m.cachedColWidths = calculateColumnWidths(m.width, m.repositories)
 		m.cachedWidth = m.width
 		m.cachedRepoCount = len(m.repositories)
@@ -88,46 +97,53 @@ func (m *Model) popupDimensions() (popupWidth, maxContentLines int) {
 }
 
 func calculateColumnWidths(totalWidth int, repos []*git.Repository) columnWidths {
-	available := totalWidth - 4 // account for table borders
+	ageW := 0
+	if totalWidth > ageColumnThreshold {
+		ageW = maxAgeWidth(repos)
+	}
+
+	// 4 border chars normally (│repo│branch│commit│); 5 when age column is present
+	borderOverhead := 4
+	if ageW > 0 {
+		borderOverhead = 5
+	}
+	available := totalWidth - borderOverhead - ageW
 	if available <= 0 {
 		return columnWidths{}
 	}
 
-	repoMin := repoColPrefixWidth + 1
-	branchMin := 1
-	commitMin := commitColumnMinWidth
+	repoWidth := max(
+		repoColumnMinWidth,
+		repoColPrefixWidth+clampInt(maxRepoNameLength(repos), 0, maxRepoDisplayWidth)+5,
+	)
+	branchWidth := max(
+		branchColumnMinWidth,
+		1+clampInt(maxBranchNameLength(repos), 0, maxBranchDisplayWidth)+6,
+	)
+	commitWidth := commitColumnMinWidth
 
-	repoWidth := repoMin
-	branchWidth := branchMin
-	commitWidth := commitMin
+	shortage := repoWidth + branchWidth + commitWidth - available
+	if shortage <= 0 {
+		commitWidth -= shortage
+	} else {
+		repoShrink := clampInt(shortage, 0, max(0, repoWidth-repoColumnMinWidth))
+		repoWidth -= repoShrink
+		shortage -= repoShrink
 
-	extra := available - (repoWidth + branchWidth + commitWidth)
-	if extra < 0 {
-		extra = 0
+		branchShrink := clampInt(shortage, 0, max(0, branchWidth-branchColumnMinWidth))
+		branchWidth -= branchShrink
+		shortage -= branchShrink
+
+		if shortage > 0 {
+			commitWidth -= clampInt(shortage, 0, commitWidth)
+		}
 	}
-
-	repoTarget := repoColPrefixWidth + clampInt(maxRepoNameLength(repos), 0, maxRepoDisplayWidth) + 5
-	if repoTarget < repoWidth {
-		repoTarget = repoWidth
-	}
-	growRepo := clampInt(repoTarget-repoWidth, 0, extra)
-	repoWidth += growRepo
-	extra -= growRepo
-
-	branchTarget := 1 + clampInt(maxBranchNameLength(repos), 0, maxBranchDisplayWidth) + 6
-	if branchTarget < branchWidth {
-		branchTarget = branchWidth
-	}
-	growBranch := clampInt(branchTarget-branchWidth, 0, extra)
-	branchWidth += growBranch
-	extra -= growBranch
-
-	commitWidth += extra
 
 	return columnWidths{
 		repo:      repoWidth,
 		branch:    branchWidth,
 		commitMsg: commitWidth,
+		age:       ageW,
 	}
 }
 
@@ -167,6 +183,78 @@ func maxBranchNameLength(repos []*git.Repository) int {
 		}
 	}
 	return maxLen
+}
+
+func commitAgeString(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/(24*7)))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy", int(d.Hours()/(24*365)))
+	}
+}
+
+func commitAgeForRepo(r *git.Repository) string {
+	if r == nil || r.State == nil || r.State.Branch == nil {
+		return ""
+	}
+	branch := r.State.Branch
+	if branch.State != nil && branch.State.Commit != nil {
+		c := branch.State.Commit
+		t := c.Commiter.When
+		if t.IsZero() && c.Author != nil {
+			t = c.Author.When
+		}
+		return commitAgeString(t)
+	}
+	if branch.Reference != nil {
+		if obj, err := r.Repo.CommitObject(branch.Reference.Hash()); err == nil {
+			return commitAgeString(obj.Committer.When)
+		}
+	}
+	return ""
+}
+
+func maxAgeWidth(repos []*git.Repository) int {
+	maxLen := 0
+	for _, r := range repos {
+		if s := commitAgeForRepo(r); len(s) > maxLen {
+			maxLen = len(s)
+		}
+	}
+	if maxLen == 0 {
+		return 0
+	}
+	maxLen += ageColumnPadding
+	return maxLen
+}
+
+func formatAgeColumn(width int, age string) string {
+	if width <= 0 {
+		return ""
+	}
+	contentWidth := width - ageColumnPadding
+	if contentWidth < 0 {
+		contentWidth = 0
+	}
+	return fmt.Sprintf(" %*s ", contentWidth, truncateString(age, contentWidth))
 }
 
 func branchContent(r *git.Repository) string {
@@ -238,7 +326,11 @@ func (m *Model) renderTableBorder(colWidths columnWidths, borderType string, lab
 	branchSeg := strings.Repeat(horiz, colWidths.branch)
 	commitSeg := strings.Repeat(horiz, colWidths.commitMsg)
 
-	border := left + repoSeg + mid + branchSeg + mid + commitSeg + right
+	border := left + repoSeg + mid + branchSeg + mid + commitSeg
+	if colWidths.age > 0 {
+		border += mid + strings.Repeat(horiz, colWidths.age)
+	}
+	border += right
 
 	return m.styles.TableBorder.Render(border)
 }
@@ -914,7 +1006,21 @@ func (m *Model) renderRepositoryLine(r *git.Repository, selected bool, colWidths
 	}
 
 	border := m.styles.TableBorder.Render("│")
-	return border + styledRepoCol + border + styledBranchCol + border + styledCommitCol + border
+	row := border + styledRepoCol + border + styledBranchCol + border + styledCommitCol
+	if colWidths.age > 0 {
+		ageColumn := m.applyUnselectedColumnStyle(
+			formatAgeColumn(colWidths.age, commitAgeForRepo(r)),
+			selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+		)
+		var styledAgeCol string
+		if selected {
+			styledAgeCol = m.selectedHighlightForVisual(visual).Render(ageColumn)
+		} else {
+			styledAgeCol = visual.style.Render(ageColumn)
+		}
+		row += border + styledAgeCol
+	}
+	return row + border
 }
 
 func (m *Model) renderWorktreeRepositoryLine(row overviewRow, selected bool, colWidths columnWidths) string {
@@ -978,7 +1084,21 @@ func (m *Model) renderWorktreeRepositoryLine(row overviewRow, selected bool, col
 	}
 
 	border := m.styles.TableBorder.Render("│")
-	return border + styledRepoCol + border + styledBranchCol + border + styledCommitCol + border
+	wtRow := border + styledRepoCol + border + styledBranchCol + border + styledCommitCol
+	if colWidths.age > 0 {
+		ageColumn := m.applyUnselectedColumnStyle(
+			formatAgeColumn(colWidths.age, commitAgeForRepo(repo)),
+			selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+		)
+		var styledAgeCol string
+		if selected {
+			styledAgeCol = m.selectedHighlightForVisual(visual).Render(ageColumn)
+		} else {
+			styledAgeCol = visual.style.Render(ageColumn)
+		}
+		wtRow += border + styledAgeCol
+	}
+	return wtRow + border
 }
 
 func (m *Model) renderWorktreeLine(row overviewRow, selected bool, colWidths columnWidths) string {
@@ -1049,7 +1169,21 @@ func (m *Model) renderWorktreeLine(row overviewRow, selected bool, colWidths col
 	}
 
 	border := m.styles.TableBorder.Render("│")
-	return border + styledRepoCol + border + styledBranchCol + border + styledCommitCol + border
+	wtlRow := border + styledRepoCol + border + styledBranchCol + border + styledCommitCol
+	if colWidths.age > 0 {
+		ageColumn := m.applyUnselectedColumnStyle(
+			formatAgeColumn(colWidths.age, commitAgeForRepo(repo)),
+			selected, visual.requiresCredentials, visual.hasLocalChanges, visual.dirty, visual.failed, visual.noUpstream,
+		)
+		var styledAgeCol string
+		if selected {
+			styledAgeCol = m.selectedHighlightForVisual(visual).Render(ageColumn)
+		} else {
+			styledAgeCol = visual.style.Render(ageColumn)
+		}
+		wtlRow += border + styledAgeCol
+	}
+	return wtlRow + border
 }
 
 // expandedBranchOffset returns the visual row offset (from 0) for a non-HEAD branch

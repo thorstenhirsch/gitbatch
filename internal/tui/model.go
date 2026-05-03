@@ -98,6 +98,7 @@ type columnWidths struct {
 	repo      int
 	branch    int
 	commitMsg int
+	age       int // 0 = hidden (terminal width ≤ ageColumnThreshold)
 }
 
 type repositorySortMode uint8
