@@ -423,6 +423,93 @@ func renderedColumns(t *testing.T, line string) (string, string, string) {
 	return strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2]), strings.TrimSpace(parts[3])
 }
 
+func TestWorktreeLabel_DetachedShowsHash(t *testing.T) {
+	row := overviewRow{
+		kind: overviewWorktreeRow,
+		worktree: &git.Worktree{
+			Path:       "/repos/app-detached",
+			IsDetached: true,
+			Head:       "abc1234xyz5678",
+		},
+	}
+	label := row.worktreeLabel()
+	require.Equal(t, "(detached:abc1234)", label)
+}
+
+func TestWorktreeLabel_DetachedEmptyHead(t *testing.T) {
+	row := overviewRow{
+		kind: overviewWorktreeRow,
+		worktree: &git.Worktree{
+			Path:       "/repos/app-detached",
+			IsDetached: true,
+			Head:       "",
+		},
+	}
+	require.Equal(t, "(detached:?)", row.worktreeLabel())
+}
+
+func TestWorktreeStateMarkers_Locked(t *testing.T) {
+	row := overviewRow{
+		worktree: &git.Worktree{IsLocked: true},
+	}
+	require.Equal(t, " [L]", row.worktreeStateMarkers())
+}
+
+func TestWorktreeStateMarkers_Prunable(t *testing.T) {
+	row := overviewRow{
+		worktree: &git.Worktree{IsPrunable: true},
+	}
+	require.Equal(t, " [P]", row.worktreeStateMarkers())
+}
+
+func TestWorktreeStateMarkers_LockedAndPrunable(t *testing.T) {
+	row := overviewRow{
+		worktree: &git.Worktree{IsLocked: true, IsPrunable: true},
+	}
+	require.Equal(t, " [L,P]", row.worktreeStateMarkers())
+}
+
+func TestWorktreeStateMarkers_Neither(t *testing.T) {
+	row := overviewRow{
+		worktree: &git.Worktree{},
+	}
+	require.Equal(t, "", row.worktreeStateMarkers())
+}
+
+func TestWorktreeStatusHints_LockedWorktreeHidesDeleteShowsUnlock(t *testing.T) {
+	primary := testRepoWithWorktree("app", "/repos/app", "/repos/app/.git", "main", true)
+	linked := testRepoWithWorktree("app-feature", "/worktrees/app-feature", "/repos/app/.git", "feature/demo", false)
+	// family display uses primary repo's worktrees slice; mark the linked worktree there as locked
+	primary.Worktrees[1].IsLocked = true
+
+	model := Model{
+		repositories: []*git.Repository{primary, linked},
+		worktreeMode: true,
+		cursor:       1,
+	}
+
+	hints := model.worktreeStatusHints()
+	require.Contains(t, hints, "L unlock")
+	require.NotContains(t, hints, "d delete")
+	require.NotContains(t, hints, "L lock")
+}
+
+func TestWorktreeStatusHints_UnlockedWorktreeShowsDeleteAndLock(t *testing.T) {
+	primary := testRepoWithWorktree("app", "/repos/app", "/repos/app/.git", "main", true)
+	linked := testRepoWithWorktree("app-feature", "/worktrees/app-feature", "/repos/app/.git", "feature/demo", false)
+
+	model := Model{
+		repositories: []*git.Repository{primary, linked},
+		worktreeMode: true,
+		cursor:       1,
+	}
+
+	hints := model.worktreeStatusHints()
+	require.Contains(t, hints, "d delete")
+	require.Contains(t, hints, "L lock")
+	require.NotContains(t, hints, "L unlock")
+}
+
 func runGitCommandForTUITest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 

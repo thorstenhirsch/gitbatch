@@ -133,9 +133,6 @@ func (m *Model) startQueue() tea.Cmd {
 			if r.WorkStatus() != git.Queued {
 				continue
 			}
-			if !repoIsActionable(r) {
-				continue
-			}
 			j := &job.Job{Repository: r}
 
 			switch m.mode.ID {

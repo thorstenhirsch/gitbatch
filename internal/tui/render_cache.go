@@ -147,17 +147,18 @@ func linkedWorktreeCommitSummary(r *git.Repository) (string, plumbing.Hash, bool
 
 func (m *Model) worktreeBranchContent(row overviewRow) string {
 	content := row.worktreeLabel()
+	markers := row.worktreeStateMarkers()
 	repo := row.actionRepository()
 	if repo == nil {
-		return content
+		return content + markers
 	}
 	if repo.IsLinkedWorktree() {
-		return content + m.linkedWorktreeSyncSuffix(repo)
+		return content + m.linkedWorktreeSyncSuffix(repo) + markers
 	}
 	if repo.State == nil {
-		return content
+		return content + markers
 	}
-	return content + syncSuffix(repo.State.Branch)
+	return content + syncSuffix(repo.State.Branch) + markers
 }
 
 func (m *Model) linkedWorktreeSyncSuffix(r *git.Repository) string {

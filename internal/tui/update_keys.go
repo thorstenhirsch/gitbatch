@@ -258,6 +258,16 @@ func (m *Model) handleOverviewKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.deleteSelectedWorktreeCmd()
 		}
 
+	case "X":
+		if m.worktreeMode {
+			return m, m.pruneWorktreesCmd()
+		}
+
+	case "L":
+		if m.worktreeMode {
+			return m, m.toggleWorktreeLockCmd()
+		}
+
 	case "r":
 		m.activatePanel(RemotePanel)
 
@@ -303,6 +313,8 @@ func (m *Model) handleFocusKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc", "backspace":
 		m.sidePanel = NonePanel
 		return m, nil
+	case "enter":
+		return m, m.startQueue()
 	}
 	switch m.sidePanel {
 	case BranchPanel:

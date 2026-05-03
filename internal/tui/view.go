@@ -1897,9 +1897,13 @@ func (m *Model) worktreeStatusHints() []string {
 		return nil
 	}
 
-	hints := []string{"W branches", "n worktree"}
+	hints := []string{"W branches", "n worktree", "X prune"}
 	if row, ok := m.currentOverviewRow(); ok && row.kind == overviewWorktreeRow && row.worktree != nil && !row.worktree.IsPrimary {
-		hints = append(hints, "d delete")
+		if row.worktree.IsLocked {
+			hints = append(hints, "L unlock")
+		} else {
+			hints = append(hints, "d delete", "L lock")
+		}
 	}
 	return hints
 }
@@ -1975,7 +1979,7 @@ func (m *Model) renderStatusBar() string {
 			tagHint = "space: untag"
 		}
 		if queuedCount > 0 {
-			tagHint += " | enter: run"
+			tagHint += " | enter: start batch"
 			parts := []string{fmt.Sprintf("tagged: %d", queuedCount)}
 			parts = append(parts, branchHints...)
 			if m.hasCommitTargets() {
@@ -2125,7 +2129,7 @@ Navigation:  up/k up   g/Home top        down/j down  G/End bottom
              Ctrl+U half page up         Ctrl+D half page down
              left/h scroll left          right/l scroll right
 
-Actions:     Space   toggle queue        Enter   start queue
+Actions:     Space   tag/untag repo      Enter   process tagged
              a       tag all             A       untag all
              m       cycle mode          Tab     open lazygit
 
@@ -2137,6 +2141,7 @@ Sorting:     t  toggle name/time
 
 Git:         f  fetch repo   p  pull repo   P  push repo
              n  new branch / worktree       d  delete worktree
+             L  lock/unlock worktree        X  prune stale worktrees
              c  commit / clear error        S  stash
              O  pop stash    D  drop stash
 

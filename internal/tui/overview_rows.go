@@ -45,11 +45,37 @@ func (r overviewRow) worktreeLabel() string {
 	if r.worktree == nil {
 		return "[main]"
 	}
-	label := trimWorktreeRepositoryPrefix(r.worktree.DisplayName(), r.repo)
 	if r.worktree.IsPrimary {
-		label = "[main]"
+		return "[main]"
 	}
-	return label
+	if r.worktree.IsDetached {
+		head := r.worktree.Head
+		if len(head) > 7 {
+			head = head[:7]
+		}
+		if head == "" {
+			head = "?"
+		}
+		return "(detached:" + head + ")"
+	}
+	return trimWorktreeRepositoryPrefix(r.worktree.DisplayName(), r.repo)
+}
+
+func (r overviewRow) worktreeStateMarkers() string {
+	if r.worktree == nil {
+		return ""
+	}
+	var markers []string
+	if r.worktree.IsLocked {
+		markers = append(markers, "L")
+	}
+	if r.worktree.IsPrunable {
+		markers = append(markers, "P")
+	}
+	if len(markers) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(markers, ",") + "]"
 }
 
 func trimWorktreeRepositoryPrefix(label string, repo *git.Repository) string {

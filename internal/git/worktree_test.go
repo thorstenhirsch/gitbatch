@@ -52,6 +52,7 @@ func TestCreateWorktree_AddsLinkedWorktree(t *testing.T) {
 	err = repo.CreateWorktree(WorktreeAddOptions{
 		Path:       newPath,
 		BranchName: "feature/new-worktree",
+		NewBranch:  true,
 	})
 	require.NoError(t, err)
 
@@ -75,6 +76,7 @@ func TestCreateWorktree_FromLinkedRepoUsesPrimaryWorktree(t *testing.T) {
 	err = repo.CreateWorktree(WorktreeAddOptions{
 		Path:       newPath,
 		BranchName: "feature/second-worktree",
+		NewBranch:  true,
 	})
 	require.NoError(t, err)
 
@@ -110,6 +112,89 @@ func TestRefreshModTime_UsesGitDirForLinkedWorktree(t *testing.T) {
 
 	modTime2 := repo.RefreshModTime()
 	require.True(t, modTime2.After(modTime1), "worktree gitdir writes should advance modtime")
+}
+
+func TestLocalBranchExists(t *testing.T) {
+	basePath := initLocalWorktreeRepo(t)
+	repo, err := InitializeRepo(basePath)
+	require.NoError(t, err)
+
+	require.True(t, repo.LocalBranchExists("main"))
+	require.False(t, repo.LocalBranchExists("nonexistent"))
+	require.False(t, repo.LocalBranchExists(""))
+}
+
+func TestCreateWorktree_ExistingBranch(t *testing.T) {
+	basePath := initLocalWorktreeRepo(t)
+	repo, err := InitializeRepo(basePath)
+	require.NoError(t, err)
+
+	runGitCommand(t, basePath, "branch", "feature/existing")
+
+	newPath := filepath.Join(filepath.Dir(basePath), "existing-worktree")
+	err = repo.CreateWorktree(WorktreeAddOptions{
+		Path:       newPath,
+		BranchName: "feature/existing",
+		NewBranch:  false,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Refresh())
+	require.Len(t, repo.Worktrees, 2)
+	require.Equal(t, "feature/existing", repo.Worktrees[1].BranchName)
+}
+
+func TestPruneWorktrees_ClearsStaleMetadata(t *testing.T) {
+	basePath := initLocalWorktreeRepo(t)
+	repo, err := InitializeRepo(basePath)
+	require.NoError(t, err)
+
+	linkedPath := filepath.Join(filepath.Dir(basePath), "prunable-worktree")
+	runGitCommand(t, basePath, "worktree", "add", "-b", "feature/prunable", linkedPath)
+
+	require.NoError(t, repo.Refresh())
+	require.Len(t, repo.Worktrees, 2)
+
+	require.NoError(t, os.RemoveAll(linkedPath))
+
+	require.NoError(t, repo.PruneWorktrees())
+	require.NoError(t, repo.Refresh())
+	require.Len(t, repo.Worktrees, 1)
+}
+
+func TestLockWorktree_RejectsPrimary(t *testing.T) {
+	basePath := initLocalWorktreeRepo(t)
+	repo, err := InitializeRepo(basePath)
+	require.NoError(t, err)
+
+	err = repo.LockWorktree(repo.PrimaryWorktree(), "")
+	require.EqualError(t, err, "cannot lock primary worktree")
+}
+
+func TestLockUnlockWorktree(t *testing.T) {
+	basePath := initLocalWorktreeRepo(t)
+	repo, err := InitializeRepo(basePath)
+	require.NoError(t, err)
+
+	linkedPath := filepath.Join(filepath.Dir(basePath), "lock-worktree")
+	runGitCommand(t, basePath, "worktree", "add", "-b", "feature/lock", linkedPath)
+	require.NoError(t, repo.Refresh())
+
+	linked := repo.Worktrees[1]
+	require.False(t, linked.IsLocked)
+
+	require.NoError(t, repo.LockWorktree(linked, "test lock"))
+	require.NoError(t, repo.Refresh())
+	require.True(t, repo.Worktrees[1].IsLocked)
+
+	err = repo.RemoveWorktree(repo.Worktrees[1], false)
+	require.Error(t, err, "locked worktree should not be removable without force")
+
+	require.NoError(t, repo.UnlockWorktree(repo.Worktrees[1]))
+	require.NoError(t, repo.Refresh())
+	require.False(t, repo.Worktrees[1].IsLocked)
+
+	require.NoError(t, repo.RemoveWorktree(repo.Worktrees[1], false))
 }
 
 func initLocalWorktreeRepo(t *testing.T) string {

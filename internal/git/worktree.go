@@ -27,8 +27,9 @@ type Worktree struct {
 type WorktreeAddOptions struct {
 	Path       string
 	BranchName string
-	StartPoint string
+	StartPoint string // only applies when NewBranch is true
 	Force      bool
+	NewBranch  bool // when true, creates a new branch (-b); when false, checks out an existing branch
 }
 
 // RepositoryStateProfile groups repositories by the status rules that apply to
@@ -160,9 +161,13 @@ func (r *Repository) CreateWorktree(options WorktreeAddOptions) error {
 	if options.Force {
 		args = append(args, "--force")
 	}
-	args = append(args, "-b", branchName, path)
-	if startPoint := strings.TrimSpace(options.StartPoint); startPoint != "" {
-		args = append(args, startPoint)
+	if options.NewBranch {
+		args = append(args, "-b", branchName, path)
+		if startPoint := strings.TrimSpace(options.StartPoint); startPoint != "" {
+			args = append(args, startPoint)
+		}
+	} else {
+		args = append(args, path, branchName)
 	}
 
 	r.BeginWatchSuppress()
@@ -199,6 +204,71 @@ func (r *Repository) RemoveWorktree(worktree *Worktree, force bool) error {
 	defer r.EndWatchSuppress()
 
 	_, err := r.runGitForWorktrees(args...)
+	return err
+}
+
+// LocalBranchExists reports whether a local branch with the given name exists.
+func (r *Repository) LocalBranchExists(name string) bool {
+	if r == nil || name == "" {
+		return false
+	}
+	_, err := r.runGitForWorktrees("rev-parse", "--verify", "--quiet", "refs/heads/"+name)
+	return err == nil
+}
+
+// PruneWorktrees removes stale worktree metadata from .git/worktrees/.
+func (r *Repository) PruneWorktrees() error {
+	if r == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+	r.BeginWatchSuppress()
+	defer r.EndWatchSuppress()
+	_, err := r.runGitForWorktrees("worktree", "prune")
+	return err
+}
+
+// LockWorktree locks a linked worktree to prevent accidental removal.
+func (r *Repository) LockWorktree(worktree *Worktree, reason string) error {
+	if r == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+	if worktree == nil {
+		return fmt.Errorf("worktree required")
+	}
+	if worktree.IsPrimary {
+		return fmt.Errorf("cannot lock primary worktree")
+	}
+	if strings.TrimSpace(worktree.Path) == "" {
+		return fmt.Errorf("worktree path required")
+	}
+	args := []string{"worktree", "lock"}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	args = append(args, worktree.Path)
+	r.BeginWatchSuppress()
+	defer r.EndWatchSuppress()
+	_, err := r.runGitForWorktrees(args...)
+	return err
+}
+
+// UnlockWorktree removes the lock on a linked worktree.
+func (r *Repository) UnlockWorktree(worktree *Worktree) error {
+	if r == nil {
+		return fmt.Errorf("repository not initialized")
+	}
+	if worktree == nil {
+		return fmt.Errorf("worktree required")
+	}
+	if worktree.IsPrimary {
+		return fmt.Errorf("cannot unlock primary worktree")
+	}
+	if strings.TrimSpace(worktree.Path) == "" {
+		return fmt.Errorf("worktree path required")
+	}
+	r.BeginWatchSuppress()
+	defer r.EndWatchSuppress()
+	_, err := r.runGitForWorktrees("worktree", "unlock", worktree.Path)
 	return err
 }
 
